@@ -1,0 +1,7 @@
+requests
+beautifulsoup4
+selenium
+schedule
+python-dotenv
+pyyaml
+sqlalchemy

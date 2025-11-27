@@ -1,0 +1,9 @@
+# Termos que o robô vai buscar nos diários
+termos_monitorados:
+  - "OAB/SP 123456"
+  - "SEU NOME COMPLETO"
+  - "00.000.000/0001-00"
+
+# Configurações do Robô
+frequencia_cron: "08:00"
+webhook_url: "https://webhook.site/..." # Vamos testar isso depois

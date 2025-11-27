@@ -1,0 +1,14 @@
+# Ignorar ambiente virtual (muito pesado)
+venv/
+.env
+
+# Ignorar arquivos compilados do Python
+__pycache__/
+*.pyc
+
+# Ignorar logs e banco de dados local (não queremos versionar isso)
+logs/*
+data/*.db
+
+# Ignorar arquivos de sistema
+.DS_Store
