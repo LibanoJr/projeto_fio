@@ -12,3 +12,5 @@ data/*.db
 
 # Ignorar arquivos de sistema
 .DS_Store
+
+src/chromedriver
