@@ -1,48 +1,63 @@
 import sqlite3
+import logging
 import os
 from datetime import datetime
 
-class DatabaseHandler:
-    def __init__(self, db_name="fio.db"):
-        # Garante que o banco seja criado na pasta 'data' na raiz do projeto
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        self.db_path = os.path.join(base_dir, "data", db_name)
-        
-        self.conn = sqlite3.connect(self.db_path)
-        self.cursor = self.conn.cursor()
-        self._criar_tabela()
+class DatabaseManager:
+    def __init__(self, db_path="data/fio.db"):
+        # Garante que a pasta data existe
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        self.db_path = db_path
+        self.logger = logging.getLogger('Database')
+        self.init_db()
 
-    def _criar_tabela(self):
-        # Cria a tabela se não existir
-        self.cursor.execute('''
+    def get_connection(self):
+        return sqlite3.connect(self.db_path)
+
+    def init_db(self):
+        """Cria a tabela se não existir."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        # Tabela robusta com campo CONTEUDO
+        cursor.execute('''
             CREATE TABLE IF NOT EXISTS publicacoes (
-                id_unico TEXT PRIMARY KEY,
-                fonte TEXT,
-                data_coleta TEXT,
-                termo_encontrado TEXT,
-                enviado INTEGER DEFAULT 0
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                termo_busca TEXT,
+                titulo TEXT,
+                link TEXT UNIQUE,
+                conteudo TEXT,
+                data_publicacao TEXT,
+                data_captura DATETIME
             )
         ''')
-        self.conn.commit()
-
-    def ja_processado(self, id_unico):
-        # Verifica se o hash/ID já existe no banco
-        self.cursor.execute("SELECT 1 FROM publicacoes WHERE id_unico = ?", (id_unico,))
-        return self.cursor.fetchone() is not None
+        conn.commit()
+        conn.close()
 
     def salvar_publicacao(self, dados):
+        """Salva uma publicação no banco. Retorna True se salvou, False se já existia."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
         try:
-            # Tenta inserir. Se o ID já existir, vai dar erro e cair no except
-            self.cursor.execute('''
-                INSERT INTO publicacoes (id_unico, fonte, data_coleta, termo_encontrado, enviado)
-                VALUES (?, ?, ?, ?, 1)
+            cursor.execute('''
+                INSERT INTO publicacoes (termo_busca, titulo, link, conteudo, data_captura)
+                VALUES (?, ?, ?, ?, ?)
             ''', (
-                dados['identificador_unico'], 
-                dados['fonte'], 
-                datetime.now().isoformat(),
-                dados.get('termo_encontrado', '')
+                dados.get('termo'),
+                dados.get('titulo'),
+                dados.get('link'),
+                dados.get('conteudo', 'Conteúdo não extraído'),
+                datetime.now()
             ))
-            self.conn.commit()
+            conn.commit()
+            self.logger.info(f"💾 [NOVO] Salvo no banco: {dados['titulo'][:30]}...")
             return True
         except sqlite3.IntegrityError:
-            return False # Já existia, retorna Falso
+            self.logger.info(f"⚠️ [DUPLICADO] Já existe no banco: {dados['link']}")
+            return False
+        except Exception as e:
+            self.logger.error(f"Erro ao salvar no banco: {e}")
+            return False
+        finally:
+            conn.close()
