@@ -1,90 +1,69 @@
-import sys
-import os
-import schedule
-import time
 import logging
-import yaml
-from datetime import datetime
+import time
+import json  # <--- 1. Adicionado para lidar com arquivos
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service as ChromeService
+from webdriver_manager.chrome import ChromeDriverManager
 
-# -------------------------------------------------------------------------
-# 🚨 O SEGREDO ESTÁ AQUI: Configura as pastas ANTES de importar o resto
-# Pega a pasta onde este arquivo está, sobe um nível e adiciona ao Python
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-# -------------------------------------------------------------------------
+try:
+    from scrapers.site_dou import SiteDOU
+except ImportError:
+    from .scrapers.site_dou import SiteDOU
 
-# AGORA SIM podemos importar os arquivos do projeto sem erro
-from src.database import DatabaseHandler
-from src.scrapers.site_teste import SiteTeste
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger('Orquestrador')
 
-# Configuração de Logs
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler("logs/fio.log"),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger("Orquestrador")
-
-def carregar_config():
-    """Lê as configurações do arquivo YAML"""
-    try:
-        # Garante que acha o arquivo mesmo rodando de pastas diferentes
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        config_path = os.path.join(base_dir, "config", "settings.yaml")
-        
-        with open(config_path, 'r') as stream:
-            return yaml.safe_load(stream)
-    except FileNotFoundError:
-        logger.error("Arquivo config/settings.yaml não encontrado!")
-        return {}
-
-def job():
-    """Esta é a função que roda todos os dias"""
-    logger.info("--- Iniciando rotina de monitoramento ---")
+def configurar_driver():
+    options = webdriver.ChromeOptions()
+    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option('useAutomationExtension', False)
     
-    # Inicializa banco
-    db = DatabaseHandler()
+    service = ChromeService(ChromeDriverManager().install())
+    return webdriver.Chrome(service=service, options=options)
 
-    # Lista de Robôs
-    scrapers = [
-        SiteTeste(db)  # Robô de teste ativado
-    ]
-
-    for bot in scrapers:
-        try:
-            bot_name = bot.__class__.__name__
-            logger.info(f"Iniciando robô: {bot_name}")
+def main():
+    logger.info("--- INICIANDO ROBÔ ---")
+    termos_busca = ["OAB", "CPF", "Licitação"]
+    driver = configurar_driver()
+    
+    try:
+        scraper = SiteDOU(logger)
+        
+        for termo in termos_busca:
+            logger.info(f"🔎 Processando: {termo}")
             
-            novas_publicacoes = bot.processar()
-            
-            if novas_publicacoes:
-                logger.info(f"Sucesso! {len(novas_publicacoes)} novas publicações encontradas no {bot_name}.")
-                # Aqui entra o envio para Webhook
+            if hasattr(scraper, 'buscar_e_extrair'):
+                resultados = scraper.buscar_e_extrair(driver, termo)
             else:
-                logger.info(f"Nenhuma novidade no {bot_name}.")
-            
-        except Exception as e:
-            logger.error(f"Erro ao executar robô {bot_name}: {e}")
+                scraper.realizar_busca(driver, termo)
+                resultados = scraper.extrair_resultados(driver)
 
-    logger.info("--- Rotina finalizada ---")
+            if resultados:
+                logger.info(f"✅ SUCESSO! {len(resultados)} resultados.")
+                
+                # --- 2. SALVAR EM ARQUIVO PARA VOCÊ VER ---
+                nome_arquivo = f"dados_{termo}.json"
+                with open(nome_arquivo, 'w', encoding='utf-8') as f:
+                    json.dump(resultados, f, ensure_ascii=False, indent=4)
+                
+                logger.info(f"💾 Arquivo salvo: {nome_arquivo} (Verifique na pasta do projeto)")
+                # ------------------------------------------
+
+            else:
+                logger.warning(f"❌ 0 resultados para '{termo}'.")
+            
+            print("-" * 50)
+            
+    except Exception as e:
+        logger.error(f"Erro fatal: {e}")
+    finally:
+        logger.info("Finalizando...")
+        driver.quit()
 
 if __name__ == "__main__":
-    # Carrega config
-    config = carregar_config()
-    horario = config.get("frequencia_cron", "08:00")
-    
-    logger.info(f"Robô FIO iniciado. Agendado para rodar às {horario}")
-    
-    # Agenda a execução
-    schedule.every().day.at(horario).do(job)
-    
-    # --- MODO DE TESTE ---
-    # Roda agora mesmo (sem esperar o horário) para você ver funcionando
-    job() 
-
-    # Mantém o robô acordado
-    while True:
-        schedule.run_pending()
-        time.sleep(60)
+    main()
