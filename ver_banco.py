@@ -1,41 +1,45 @@
 import sqlite3
-import os
+import textwrap
 
-# Tenta achar o banco na pasta data ou na raiz
-caminhos = ["data/fio.db", "fio.db"]
-db_path = None
-
-for c in caminhos:
-    if os.path.exists(c):
-        db_path = c
-        break
-
-if db_path:
-    print(f"\n📂 Abrindo banco de dados: {db_path}")
-    print("="*60)
-    
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-    
+def ver_dados():
+    db_path = "data/fio.db"
     try:
-        # Pega as últimas 5 publicações
-        cursor.execute("SELECT termo_encontrado, data_coleta, link_oficial, texto_publicacao FROM publicacoes ORDER BY data_coleta DESC LIMIT 5")
-        linhas = cursor.fetchall()
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
         
-        if not linhas:
-            print("📭 O banco de dados está vazio (ainda não salvou nada).")
+        # Agora buscamos também as colunas MINERADAS
+        cursor.execute("SELECT id, titulo, link, cnpjs, valores FROM publicacoes WHERE cnpjs IS NOT NULL OR valores IS NOT NULL ORDER BY id DESC LIMIT 3")
+        rows = cursor.fetchall()
         
-        for i, linha in enumerate(linhas):
-            print(f"📌 RESULTADO #{i+1}")
-            print(f"🔎 Termo: {linha[0]}")
-            print(f"📅 Data: {linha[1]}")
-            print(f"🔗 Link: {linha[2]}")
-            print(f"📝 Texto: {linha[3][:150]}...") # Mostra só o começo do texto
-            print("-" * 60)
+        if not rows:
+            print("📭 Nenhum dado minerado encontrado.")
+            return
+
+        print(f"\n{'='*60}")
+        print(f"💎 DADOS ENRIQUECIDOS (MINERADOS)")
+        print(f"{'='*60}")
+
+        for id_pub, titulo, link, cnpjs, valores in rows:
+            print(f"🆔 ID: {id_pub}")
+            print(f"📄 Título: {titulo[:60]}...")
+            print(f"🔗 Link: {link}")
+            print("-" * 30)
             
-    except Exception as e:
-        print(f"Erro ao ler: {e}")
-    finally:
+            if cnpjs:
+                print(f"🏢 CNPJs Extraídos:\n   {cnpjs}")
+            else:
+                print("🏢 CNPJs: (Nenhum)")
+                
+            if valores:
+                print(f"💰 Valores Identificados:\n   {valores}")
+            else:
+                print("💰 Valores: (Nenhum)")
+                
+            print(f"{'='*60}\n")
+            
         conn.close()
-else:
-    print("❌ Arquivo de banco de dados (fio.db) não encontrado!")
+    except Exception as e:
+        print(f"Erro: {e}")
+
+if __name__ == "__main__":
+    ver_dados()

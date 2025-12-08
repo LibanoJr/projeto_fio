@@ -12,3 +12,11 @@ data/*.db
 
 # Ignorar arquivos de sistema
 .DS_Store
+
+# Ignorar arquivos de dados gerados pelo robô
+*.json
+*.csv
+
+# Ignorar prints de debug e erros
+*.png
+*.jpg
