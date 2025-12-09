@@ -17,6 +17,16 @@ class MineradorDados:
         self.regex_cnpj = r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}"
         self.regex_valor = r"R\$\s?[\d\.]+(?:,\d{2})?"
 
+    def minerar_texto(self, texto):
+        """Método auxiliar para minerar texto solto (sem ler do banco)."""
+        lista_cnpjs = re.findall(self.regex_cnpj, texto)
+        lista_valores = re.findall(self.regex_valor, texto)
+        
+        str_cnpjs = ", ".join(list(set(lista_cnpjs))) if lista_cnpjs else None
+        str_valores = ", ".join(lista_valores) if lista_valores else None
+        
+        return str_cnpjs, str_valores
+    
     def processar_banco(self):
         conn = self.db.get_connection()
         cursor = conn.cursor()

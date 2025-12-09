@@ -1,26 +1,23 @@
-projeto-fio/
-│
-├── config/
-│   ├── settings.yaml      # Termos de busca e configs gerais (frequência)
-│   └── sites.json         # URLs e seletores específicos de cada site
+projeto_fio/
 │
 ├── data/
-│   └── fio.db             # SQLite para deduplicação (IDs/Hashes)
-│
-├── logs/                  # Arquivos de log diários
+│   └── fio.db              # O CÉREBRO. Seu banco de dados SQLite com tudo salvo.
 │
 ├── src/
-│   ├── __init__.py
-│   ├── main.py            # Orquestrador (loop principal)
-│   ├── database.py        # Gerenciamento do SQLite
-│   ├── notifier.py        # Envio para o Webhook
-│   └── scrapers/          # Módulos individuais para cada site
-│       ├── __init__.py
-│       ├── base_scraper.py # Classe modelo (Pai)
-│       ├── site_tj_sp.py
-│       └── site_uniao.py
+│   ├── main.py             # O CHEFE (Orquestrador).
+│   │                       # Configura os termos ("OAB/SP", "Licitação"),
+│   │                       # Chama o scraper e manda salvar no banco.
+│   │
+│   ├── database.py         # O ARQUIVO.
+│   │                       # Cria a tabela, salva dados e evita erros de SQL.
+│   │
+│   ├── minerador.py        # A REFINARIA.
+│   │                       # Lê o banco, procura CNPJ/R$ e atualiza as colunas.
+│   │
+│   └── scrapers/
+│       └── site_dou.py     # O OPERÁRIO.
+│           └── Classe SiteDOU: Sabe abrir o Chrome, clicar, esperar e ler o HTML.
 │
-├── .env                   # Credenciais (SENHAS) - Nunca sobe pro Git
-├── .gitignore
-├── requirements.txt
-└── README.md
+├── ver_banco.py            # O VISUALIZADOR. Script simples para imprimir os dados no terminal.
+├── .gitignore              # O SEGURANÇA. Impede que lixo (logs, venv) suba pro GitHub.
+└── requirements.txt        # (Recomendado ter) Lista de bibliotecas (selenium, etc).

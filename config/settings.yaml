@@ -4,6 +4,13 @@ termos_monitorados:
   - "SEU NOME COMPLETO"
   - "00.000.000/0001-00"
 
-# Configurações do Robô
-frequencia_cron: "08:00"
-webhook_url: "https://webhook.site/..." # Vamos testar isso depois
+
+# Configurações do Robô FIO
+
+webhook_url: "https://webhook.site/d7543f9f-ddf6-4e12-81f7-bd2138da1008"  
+
+termos_busca:
+  - '"OAB/SP"'
+  - '"Aquisição de Computadores"'
+  - '"Aquisição de Computadores"'
+limite_por_termo: 2   # Baixo para o teste ser rápido
