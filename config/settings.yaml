@@ -4,6 +4,9 @@ termos_monitorados:
   - "SEU NOME COMPLETO"
   - "00.000.000/0001-00"
 
+# Credenciais (O Jusbrasil exige login para ver tudo)
+jusbrasil_user: "libanoabboudjr@gmail.com"
+jusbrasil_pass: "@Abb20052001"
 
 # Configurações do Robô FIO
 

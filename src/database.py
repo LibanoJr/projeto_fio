@@ -10,6 +10,16 @@ class DatabaseManager:
         self.logger = logging.getLogger('Database')
         self.init_db()
 
+    def get_last_id_by_link(self, link):
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute("SELECT id FROM publicacoes WHERE link = ?", (link,))
+            res = cursor.fetchone()
+            return res[0] if res else None
+        finally:
+            conn.close()
+
     def get_connection(self):
         return sqlite3.connect(self.db_path)
 
