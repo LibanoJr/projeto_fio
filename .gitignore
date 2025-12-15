@@ -5,6 +5,10 @@ venv/
 # Ignorar arquivos compilados do Python
 __pycache__/
 *.pyc
+chrome_perfil_jusbrasil/
+chrome_perfil_debug/
+debug_*.html
+*.log
 
 # Ignorar logs e banco de dados local (não queremos versionar isso)
 logs/*
