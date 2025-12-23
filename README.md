@@ -1,24 +1,57 @@
-# Projeto FIO - Robô de Monitoramento Jurídico
+# 🏛️ PROJETO FIO: Auditor de Contratos Públicos com IA
 
-## 📋 Sobre o Projeto
-Este projeto consiste em um robô (crawler) desenvolvido em Python para realizar consultas diárias em sites jurídicos (Diários Oficiais e Tribunais). O objetivo é filtrar publicações por termos específicos (OAB, CPF, CNPJ, nomes) e notificar um sistema externo via Webhook.
+> **Status:** ✅ Funcional (Fase de Análise Jurídica)
 
-O sistema conta com:
-- **Autenticação:** Suporte a login em áreas restritas.
-- **Deduplicação:** Banco de dados local (SQLite) para garantir que a mesma publicação não seja enviada duas vezes.
-- **Resiliência:** Sistema de logs e tratamento de erros.
+O **Projeto FIO** é uma ferramenta de auditoria automatizada que utiliza Inteligência Artificial Generativa (**Google Gemini**) para fiscalizar a integridade, clareza e riscos em contratos públicos federais.
 
-## 🚀 Tecnologias
-- Python 3.8+
-- SQLite (Persistência de dados)
-- Requests / BeautifulSoup (Scraping leve)
-- Selenium (Scraping complexo)
-- Schedule (Agendamento de tarefas)
+Diferente de sistemas tradicionais que analisam apenas números, o FIO atua como um **Analista Jurídico Virtual**, lendo e interpretando o objeto dos contratos do **Portal da Transparência** para identificar inconsistências, descrições vagas ou irregularidades administrativas.
 
-## ⚙️ Configuração
+---
 
-### 1. Variáveis de Ambiente
-Crie um arquivo `.env` na raiz do projeto com as credenciais dos sites:
-```bash
-SITE_TJSP_USER=seu_usuario
-SITE_TJSP_PASS=sua_senha
+## 🚀 Funcionalidades
+
+- **📡 Conexão Governamental:** Integração direta com a API do Portal da Transparência Federal.
+- **🧠 Análise Semântica (NLP):** Uso do Google Gemini (LLM) para "ler" o juridiquês dos contratos.
+- **🔍 Detecção de Riscos:**
+  - Identificação de objetos genéricos ou obscuros.
+  - Alerta para contratos com Valor R$ 0,00 (risco de falta de empenho ou erro de cadastro).
+  - Verificação de datas e vigências suspeitas (ex: dados legados).
+- **📄 Geração de Dossiê:** Criação automática de relatórios em formato Markdown prontos para apresentação.
+
+---
+
+## 🛠️ Tecnologias Utilizadas
+
+- **Linguagem:** Python 3.x
+- **Integração API:** `requests` (Consumo de API REST do Governo Federal)
+- **Inteligência Artificial:** `google-generativeai` (Google Gemini Flash)
+- **Estrutura de Dados:** JSON e Manipulação de Arquivos
+
+---
+
+## 📊 Exemplo de Auditoria Real
+
+O sistema é capaz de gerar pareceres técnicos detalhados. Abaixo, um exemplo real de saída do sistema detectando uma inconsistência financeira:
+
+> **CONTRATO Nº 322005 (MEC)**
+>
+> **Objeto:** *Fornecimento de energia elétrica tarifa horo-sazonal...*
+> **Valor Declarado:** R$ 0,00
+>
+> **🧠 Parecer da IA:**
+> **Risco Identificado (ALTO):** O valor zerado é inadequado para um serviço contínuo e oneroso (energia). Indica falha no cadastro ou falta de transparência orçamentária, impedindo a fiscalização do custo efetivo.
+
+---
+
+## ⚙️ Como Executar
+
+### Pré-requisitos
+- Python instalado.
+- Chave de API do [Portal da Transparência](https://api.portaldatransparencia.gov.br/).
+- Chave de API do [Google AI Studio](https://aistudio.google.com/).
+
+### Instalação
+
+1. Clone o repositório:
+   ```bash
+   git clone [https://github.com/seu-usuario/projeto-fio.git](https://github.com/seu-usuario/projeto-fio.git)

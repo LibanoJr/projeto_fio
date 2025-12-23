@@ -5,3 +5,4 @@ _ARQUIVOS_ANTIGOS/
 *.png
 *.html
 *.md
+.env
