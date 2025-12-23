@@ -1,26 +1,7 @@
-# Ignorar ambiente virtual (muito pesado)
 venv/
-.env
-
-# Ignorar arquivos compilados do Python
 __pycache__/
-*.pyc
-chrome_perfil_jusbrasil/
-chrome_perfil_debug/
-debug_*.html
+_ARQUIVOS_ANTIGOS/
 *.log
-
-# Ignorar logs e banco de dados local (não queremos versionar isso)
-logs/*
-data/*.db
-
-# Ignorar arquivos de sistema
-.DS_Store
-
-# Ignorar arquivos de dados gerados pelo robô
-*.json
-*.csv
-
-# Ignorar prints de debug e erros
 *.png
-*.jpg
+*.html
+*.md
