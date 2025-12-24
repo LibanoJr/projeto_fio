@@ -55,3 +55,13 @@ O sistema é capaz de gerar pareceres técnicos detalhados. Abaixo, um exemplo r
 1. Clone o repositório:
    ```bash
    git clone [https://github.com/seu-usuario/projeto-fio.git](https://github.com/seu-usuario/projeto-fio.git)
+
+   ## 🖥️ Interface Web (Streamlit)
+
+O projeto conta com uma interface visual para facilitar a auditoria.
+
+1. Ative o ambiente virtual (se ainda não estiver):
+   ```bash
+   source venv/bin/activate  # Mac/Linux
+   # ou
+   venv\Scripts\activate     # Windows
