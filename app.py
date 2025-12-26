@@ -63,49 +63,47 @@ def analisar_ia(texto):
         return "Erro IA."
 
 def consultar_ficha_suja_blindada(cnpj_alvo):
-    # 1. Limpa tudo para garantir que temos só números
+    # 1. Preparação
     cnpj_limpo = re.sub(r'\D', '', cnpj_alvo)
-    
-    # 2. Se não tiver 14 dígitos, nem tenta (evita erro)
     if len(cnpj_limpo) != 14:
         return []
 
-    # 3. MONTA A FORMATAÇÃO OBRIGATÓRIA (XX.XXX.XXX/XXXX-XX)
-    cnpj_formatado_envio = f"{cnpj_limpo[:2]}.{cnpj_limpo[2:5]}.{cnpj_limpo[5:8]}/{cnpj_limpo[8:12]}-{cnpj_limpo[12:]}"
+    # Formatação Obrigatória para a API
+    cnpj_formatado = f"{cnpj_limpo[:2]}.{cnpj_limpo[2:5]}.{cnpj_limpo[5:8]}/{cnpj_limpo[8:12]}-{cnpj_limpo[12:]}"
     
-    url = "https://api.portaldatransparencia.gov.br/api-de-dados/ceis"
     headers = {"chave-api-dados": API_KEY_GOVERNO}
-    
     sancoes_confirmadas = []
 
-    # --- DEBUG NO EXPANDER (Para não sujar a tela principal) ---
-    with st.expander("🕵️ Log Técnico da Conexão (Debug)"):
-        st.write(f"Enviando para o Governo: {cnpj_formatado_envio}")
+    # 2. LISTA DE BASES PARA CONSULTAR (CEIS + CNEP)
+    bases = ["ceis", "cnep"]
 
-    try:
-        # AGORA ENVIAMOS O FORMATADO
-        params = {"cnpjSancionado": cnpj_formatado_envio, "pagina": 1}
-        response = requests.get(url, headers=headers, params=params, timeout=15)
-        
-        if response.status_code == 200:
-            dados = response.json()
+    with st.expander(f"🕵️ Log de Rastreamento ({cnpj_formatado})"):
+        for base in bases:
+            url = f"https://api.portaldatransparencia.gov.br/api-de-dados/{base}"
+            st.write(f"📡 Conectando na base **{base.upper()}**...")
             
-            # FILTRO DE SEGURANÇA
-            for item in dados:
-                # Pega o CNPJ que voltou
-                cnpj_voltou = item.get('pessoa', {}).get('cnpjFormatado', '')
-                if not cnpj_voltou:
-                    cnpj_voltou = item.get('sancionado', {}).get('codigoFormatado', '')
-
-                # Limpa para comparar
-                cnpj_voltou_limpo = re.sub(r'\D', '', str(cnpj_voltou))
+            try:
+                params = {"cnpjSancionado": cnpj_formatado, "pagina": 1}
+                response = requests.get(url, headers=headers, params=params, timeout=10)
                 
-                # Compara: O que voltou é igual ao que pedi?
-                if cnpj_voltou_limpo == cnpj_limpo:
-                    sancoes_confirmadas.append(item)
+                if response.status_code == 200:
+                    dados = response.json()
+                    st.write(f"✅ {base.upper()}: Retornou {len(dados)} registros brutos.")
                     
-    except Exception as e:
-        st.error(f"Erro de conexão: {e}")
+                    # FILTRO DE SEGURANÇA
+                    for item in dados:
+                        cnpj_voltou = item.get('pessoa', {}).get('cnpjFormatado', '') or item.get('sancionado', {}).get('codigoFormatado', '')
+                        cnpj_voltou_limpo = re.sub(r'\D', '', str(cnpj_voltou))
+                        
+                        if cnpj_voltou_limpo == cnpj_limpo:
+                            # Adiciona uma etiqueta para sabermos de onde veio
+                            item['origem_dado'] = base.upper()
+                            sancoes_confirmadas.append(item)
+                            st.write(f"🔴 ALVO CONFIRMADO EM {base.upper()}!")
+                else:
+                    st.write(f"⚠️ {base.upper()}: Falha {response.status_code}")
+            except Exception as e:
+                st.write(f"❌ Erro em {base.upper()}: {e}")
 
     return sancoes_confirmadas
 
@@ -221,8 +219,9 @@ elif opcao == "🚫 Consultar Empresa (CNPJ)":
                     orgao = s.get('orgaoSancionador', {}).get('nome', 'Órgão não informado')
                     motivo = s.get('fundamentacao', [{}])[0].get('descricao', 'Não detalhado')
                     data_pub = s.get('dataPublicacaoSancao', '-')
+                    origem = s.get('origem_dado', 'CEIS') # Pega a origem ou assume CEIS
                     
-                    with st.expander(f"🔴 Sanção {i+1}: {orgao}"):
-                        st.write(f"**Data:** {data_pub}")
-                        st.write(f"**Motivo:** {motivo}")
-                        st.write(f"**Fonte:** Portal da Transparência (CEIS)")
+                    with st.expander(f"🔴 Sanção {i+1} ({origem}) - {orgao}"):
+                        st.markdown(f"**Base de Dados:** {origem}")
+                        st.markdown(f"**Data:** {data_pub}")
+                        st.markdown(f"**Motivo:** {motivo}")
