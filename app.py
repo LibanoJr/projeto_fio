@@ -69,7 +69,7 @@ def consultar_ficha_suja_blindada(cnpj_alvo):
     if len(cnpj_limpo) != 14:
         return []
 
-    # O CNPJ formatado serve apenas para exibição, para a API tentaremos enviar limpo
+    # O formato é OBRIGATÓRIO para a API filtrar corretamente
     cnpj_formatado = f"{cnpj_limpo[:2]}.{cnpj_limpo[2:5]}.{cnpj_limpo[5:8]}/{cnpj_limpo[8:12]}-{cnpj_limpo[12:]}"
     
     headers = {"chave-api-dados": API_KEY_GOVERNO}
@@ -82,18 +82,22 @@ def consultar_ficha_suja_blindada(cnpj_alvo):
             st.write(f"📡 Conectando na base **{base.upper()}**...")
             
             try:
-                # CORREÇÃO CRÍTICA: Enviar apenas números para evitar erro de filtro
-                params = {"cnpjSancionado": cnpj_limpo, "pagina": 1}
+                # CORREÇÃO: Enviando formatado para a API obedecer
+                params = {"cnpjSancionado": cnpj_formatado, "pagina": 1}
                 response = requests.get(url, headers=headers, params=params, timeout=10)
                 
                 if response.status_code == 200:
                     dados = response.json()
                     
-                    # FILTRAGEM SILENCIOSA (Só avisa se encontrar o CNPJ certo)
-                    count_match = 0
-                    if len(dados) > 0:
+                    # Se voltou vazio [], é porque realmente não tem nada (Para CNPJ limpo)
+                    if len(dados) == 0:
+                        st.write(f"✅ {base.upper()}: Nenhum registro encontrado na base.")
+                    else:
+                        st.write(f"⚠️ {base.upper()}: Retornou {len(dados)} registros potenciais. Analisando...")
+                        
+                        count_match = 0
                         for item in dados:
-                            # Pega o CNPJ que veio da API
+                            # Tenta capturar o CNPJ do retorno
                             cnpj_voltou = (item.get('pessoa', {}).get('cnpjFormatado') or 
                                            item.get('sancionado', {}).get('codigoFormatado') or "")
                             
@@ -103,16 +107,16 @@ def consultar_ficha_suja_blindada(cnpj_alvo):
                             raiz_input = cnpj_limpo[:8]
                             raiz_voltou = cnpj_voltou_limpo[:8]
 
+                            # Lógica: É o mesmo CNPJ? OU É a mesma raiz (Filial/Matriz)?
                             if cnpj_voltou_limpo == cnpj_limpo or (raiz_voltou == raiz_input and len(raiz_voltou) == 8):
                                 item['origem_dado'] = base.upper()
                                 sancoes_confirmadas.append(item)
                                 count_match += 1
                         
-                    if count_match > 0:
-                         st.write(f"🔴 **ALERTA:** {count_match} registros confirmados em {base.upper()}!")
-                    else:
-                         # Se a API retornou lixo (os 15 genéricos), mostramos "Limpo"
-                         st.write(f"✅ {base.upper()}: Nenhum registro vinculado ao alvo.")
+                        if count_match > 0:
+                             st.write(f"🔴 **ALERTA CONFIRMADO:** {count_match} sanções vinculadas a este CNPJ/Raiz!")
+                        else:
+                             st.write(f"✅ Falso positivo: Os registros retornados não pertencem a este CNPJ.")
 
                 else:
                     st.write(f"⚠️ {base.upper()}: Falha de conexão ({response.status_code})")
@@ -165,7 +169,7 @@ if st.sidebar.button("🗑️ Nova Consulta"):
 
 opcao = st.sidebar.radio("Opção:", ["🔍 Analisar Contratos", "🚫 Consultar Empresa (CNPJ)"])
 
-st.title("🏛️ Sistema de Compliance V2.2 (Final)")
+st.title("🏛️ Sistema de Compliance V2.3 (Final)")
 
 if opcao == "🔍 Analisar Contratos":
     if st.button("Buscar Contratos MEC"):
