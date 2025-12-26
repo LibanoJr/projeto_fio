@@ -137,7 +137,7 @@ opcao = st.sidebar.radio(
     ["🔍 Analisar Contratos (IA)", "🚫 Consultar Ficha Suja (CNPJ)"]
 )
 
-st.title("🏛️ Sistema de Auditoria e Compliance Governamental")
+st.title("🚀 VERSÃO NOVA - AGORA VAI")
 
 # --- TELA 1: AUDITORIA DE CONTRATOS ---
 if opcao == "🔍 Analisar Contratos (IA)":
