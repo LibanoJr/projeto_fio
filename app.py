@@ -29,8 +29,7 @@ if 'nome_empresa_atual' not in st.session_state:
 
 def buscar_dados_receita(cnpj):
     """
-    Busca o Nome/Razão Social na BrasilAPI (Pública e Gratuita)
-    Para garantir que estamos auditando a empresa certa.
+    Busca o Nome/Razão Social na BrasilAPI.
     """
     cnpj_limpo = re.sub(r'\D', '', cnpj)
     url = f"https://brasilapi.com.br/api/cnpj/v1/{cnpj_limpo}"
@@ -38,7 +37,6 @@ def buscar_dados_receita(cnpj):
         response = requests.get(url, timeout=5)
         if response.status_code == 200:
             dados = response.json()
-            # Retorna Razão Social ou Nome Fantasia
             return dados.get('razao_social', dados.get('nome_fantasia', 'Nome não encontrado'))
         return None
     except:
@@ -107,7 +105,7 @@ def gerar_pdf(cnpj, nome, dados):
         
     t = Table(data, colWidths=[200, 180, 80])
     t.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (-1,0), colors.darkblue),
+        ('BACKGROUND', (0,0), (-1,0), colors.darkred), # Mudei para vermelho pra dar impacto
         ('TEXTCOLOR', (0,0), (-1,0), colors.white),
         ('GRID', (0,0), (-1,-1), 1, colors.black)
     ]))
@@ -148,23 +146,27 @@ elif opcao == "🚫 Consultar Empresa (CNPJ)":
             st.error("CNPJ inválido.")
         else:
             # 1. Busca o Nome da Empresa (BrasilAPI)
-            with st.spinner("Identificando empresa na Receita..."):
+            with st.spinner("Identificando empresa..."):
                 nome_empresa = buscar_dados_receita(cnpj_in)
-                
-            if nome_empresa:
-                st.session_state['nome_empresa_atual'] = nome_empresa
-                st.success(f"🏢 Empresa Identificada: **{nome_empresa}**")
-                
-                # 2. Busca Sanções (Gov API)
-                with st.spinner(f"Auditando bases do governo para {nome_empresa}..."):
-                    resultado_real = consultar_ficha_suja_blindada(cnpj_in)
-                    st.session_state['dados_busca'] = resultado_real
-                    st.session_state['cnpj_atual'] = cnpj_in
+            
+            # --- CORREÇÃO DE LOGICA ---
+            # Se não achar o nome, define um nome genérico e CONTINUA a busca
+            if not nome_empresa:
+                nome_empresa = "Razão Social Indisponível (CNPJ Antigo ou Baixado)"
+                st.warning(f"⚠️ Aviso: Nome não encontrado na base atual, mas auditaremos as sanções mesmo assim.")
             else:
-                st.warning("CNPJ não encontrado na base da Receita Federal (BrasilAPI). Verifique o número.")
+                st.success(f"🏢 Empresa: **{nome_empresa}**")
+            
+            st.session_state['nome_empresa_atual'] = nome_empresa
+
+            # 2. Busca Sanções (Gov API) - SEMPRE EXECUTA AGORA
+            with st.spinner(f"Auditando bases do governo..."):
+                resultado_real = consultar_ficha_suja_blindada(cnpj_in)
+                st.session_state['dados_busca'] = resultado_real
+                st.session_state['cnpj_atual'] = cnpj_in
 
     # Exibição Final
-    if st.session_state['dados_busca'] is not None and st.session_state['nome_empresa_atual']:
+    if st.session_state['dados_busca'] is not None:
         # Verifica consistência
         input_limpo = re.sub(r'\D','', cnpj_in)
         memoria_limpo = re.sub(r'\D','', st.session_state['cnpj_atual'])
@@ -176,14 +178,15 @@ elif opcao == "🚫 Consultar Empresa (CNPJ)":
             if len(sancoes) == 0:
                 st.divider()
                 st.success(f"✅ NADA CONSTA: {nome}")
-                st.markdown(f"A empresa **{nome}** (CNPJ {st.session_state['cnpj_atual']}) foi auditada e **não possui registros** no Cadastro de Empresas Inidôneas (CEIS).")
+                st.markdown(f"CNPJ {st.session_state['cnpj_atual']} auditado e **limpo** no CEIS.")
                 st.balloons()
             else:
                 st.divider()
-                st.error(f"🚨 ALERTA: {len(sancoes)} PROCESSOS PARA {nome}")
+                st.error(f"🚨 ALERTA MÁXIMO: {len(sancoes)} PROCESSOS ENCONTRADOS!")
+                st.write(f"**Empresa Alvo:** {nome}")
                 
                 pdf = gerar_pdf(st.session_state['cnpj_atual'], nome, sancoes)
-                st.download_button("📥 Baixar Relatório", data=pdf, file_name=f"auditoria_{nome}.pdf")
+                st.download_button("📥 Baixar Dossiê PDF", data=pdf, file_name=f"auditoria_risk.pdf")
                 
                 for s in sancoes:
                     st.write(f"**Motivo:** {s.get('fundamentacao',[{}])[0].get('descricao','-')}")
