@@ -63,46 +63,45 @@ def analisar_ia(texto):
         return "Erro IA."
 
 def consultar_ficha_suja_blindada(cnpj_alvo):
-    # Limpeza básica
-    cnpj_alvo_limpo = re.sub(r'\D', '', cnpj_alvo)
+    # 1. Limpa tudo para garantir que temos só números
+    cnpj_limpo = re.sub(r'\D', '', cnpj_alvo)
+    
+    # 2. Se não tiver 14 dígitos, nem tenta (evita erro)
+    if len(cnpj_limpo) != 14:
+        return []
+
+    # 3. MONTA A FORMATAÇÃO OBRIGATÓRIA (XX.XXX.XXX/XXXX-XX)
+    cnpj_formatado_envio = f"{cnpj_limpo[:2]}.{cnpj_limpo[2:5]}.{cnpj_limpo[5:8]}/{cnpj_limpo[8:12]}-{cnpj_limpo[12:]}"
     
     url = "https://api.portaldatransparencia.gov.br/api-de-dados/ceis"
     headers = {"chave-api-dados": API_KEY_GOVERNO}
     
     sancoes_confirmadas = []
 
-    # Vamos tentar buscar apenas pelos 8 primeiros dígitos (RAIZ DO CNPJ)
-    # Isso ajuda a achar a empresa mesmo se a sanção for na matriz e buscarmos a filial
-    cnpj_raiz = cnpj_alvo_limpo[:8]
-
-    st.warning(f"🕵️ MODO ESPIÃO ATIVADO: Buscando Raiz {cnpj_raiz}...")
+    # --- DEBUG NO EXPANDER (Para não sujar a tela principal) ---
+    with st.expander("🕵️ Log Técnico da Conexão (Debug)"):
+        st.write(f"Enviando para o Governo: {cnpj_formatado_envio}")
 
     try:
-        # Tenta buscar usando a API
-        params = {"cnpjSancionado": cnpj_alvo_limpo, "pagina": 1}
+        # AGORA ENVIAMOS O FORMATADO
+        params = {"cnpjSancionado": cnpj_formatado_envio, "pagina": 1}
         response = requests.get(url, headers=headers, params=params, timeout=15)
         
         if response.status_code == 200:
             dados = response.json()
             
-            # --- ÁREA DO ESPIÃO ---
-            st.markdown("### 📋 O que o Governo respondeu (Sem filtros):")
-            if not dados:
-                st.write("O Governo respondeu com uma lista VAZIA [].")
-            
+            # FILTRO DE SEGURANÇA
             for item in dados:
-                # Tenta pegar dados de todos os cantos
-                nome_sancionado = item.get('sancionado', {}).get('nome', 'Sem Nome')
-                cnpj_formatado = item.get('sancionado', {}).get('codigoFormatado', 'Sem CNPJ')
-                
-                # Mostra na tela para a gente ver
-                st.code(f"Achei: {nome_sancionado} | CNPJ: {cnpj_formatado}")
+                # Pega o CNPJ que voltou
+                cnpj_voltou = item.get('pessoa', {}).get('cnpjFormatado', '')
+                if not cnpj_voltou:
+                    cnpj_voltou = item.get('sancionado', {}).get('codigoFormatado', '')
 
-                # --- LÓGICA DE FILTRO (AGORA MAIS FLEXÍVEL) ---
-                # Se os 8 primeiros números do CNPJ baterem, a gente pega!
-                cnpj_encontrado_limpo = re.sub(r'\D', '', str(cnpj_formatado))
+                # Limpa para comparar
+                cnpj_voltou_limpo = re.sub(r'\D', '', str(cnpj_voltou))
                 
-                if cnpj_encontrado_limpo.startswith(cnpj_raiz):
+                # Compara: O que voltou é igual ao que pedi?
+                if cnpj_voltou_limpo == cnpj_limpo:
                     sancoes_confirmadas.append(item)
                     
     except Exception as e:
@@ -190,7 +189,7 @@ elif opcao == "🚫 Consultar Empresa (CNPJ)":
                 st.session_state['dados_busca'] = resultado_real
                 st.session_state['cnpj_atual'] = cnpj_in
 
-    # EXIBIÇÃO DOS RESULTADOS
+   # EXIBIÇÃO DOS RESULTADOS
     if st.session_state['dados_busca'] is not None:
         # Check de segurança visual
         input_limpo = re.sub(r'\D','', cnpj_in)
@@ -207,24 +206,23 @@ elif opcao == "🚫 Consultar Empresa (CNPJ)":
             else:
                 st.divider()
                 st.error(f"🚨 ALERTA VERMELHO: {len(sancoes)} SANÇÕES ENCONTRADAS!")
-                st.write(f"**Entidade:** {nome}")
+                st.markdown(f"**Empresa:** {nome}")
+                st.markdown(f"**CNPJ:** {formatar_cnpj(st.session_state['cnpj_atual'])}")
                 
-                # Botão de PDF
+                # Tenta gerar PDF
                 try:
                     pdf = gerar_pdf(st.session_state['cnpj_atual'], nome, sancoes)
                     st.download_button("📥 Baixar Dossiê (PDF)", data=pdf, file_name="relatorio_auditoria.pdf")
                 except:
-                    st.warning("Erro ao gerar PDF.")
+                    pass
 
-                # Lista Limpa (SEM JSON BRUTO)
+                # LISTAGEM LIMPA DOS PROCESSOS
                 for i, s in enumerate(sancoes):
-                    # Tenta pegar o motivo de forma segura
-                    motivo = s.get('fundamentacao', [{}])[0].get('descricao', 'Motivo não detalhado')
                     orgao = s.get('orgaoSancionador', {}).get('nome', 'Órgão não informado')
-                    data_sancao = s.get('dataPublicacaoSancao', 'Data desconhecida')
-
-                    with st.expander(f"🔴 Sanção #{i+1} - {orgao}"):
-                        st.markdown(f"**Data:** {data_sancao}")
-                        st.markdown(f"**Motivo:** {motivo}")
-                        st.markdown(f"**Órgão:** {orgao}")
-                        # JSON removido daqui para não irritar
+                    motivo = s.get('fundamentacao', [{}])[0].get('descricao', 'Não detalhado')
+                    data_pub = s.get('dataPublicacaoSancao', '-')
+                    
+                    with st.expander(f"🔴 Sanção {i+1}: {orgao}"):
+                        st.write(f"**Data:** {data_pub}")
+                        st.write(f"**Motivo:** {motivo}")
+                        st.write(f"**Fonte:** Portal da Transparência (CEIS)")
