@@ -132,6 +132,10 @@ def gerar_pdf_relatorio(cnpj, dados_sancoes):
 # --- INTERFACE VISUAL (FRONTEND) ---
 
 st.sidebar.title("👮‍♂️ Menu de Auditoria")
+# --- BOTÃO DE RESET (Limpeza de Memória) ---
+if st.sidebar.button("🗑️ Nova Consulta (Limpar Tudo)"):
+    st.session_state.clear()
+    st.rerun()
 opcao = st.sidebar.radio(
     "Escolha a ferramenta:",
     ["🔍 Analisar Contratos (IA)", "🚫 Consultar Ficha Suja (CNPJ)"]
