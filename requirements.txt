@@ -1,7 +1,5 @@
 streamlit
 requests
-pandas
 google-generativeai
 python-dotenv
 reportlab
-matplotlib
