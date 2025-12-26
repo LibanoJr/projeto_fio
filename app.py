@@ -64,8 +64,7 @@ def analisar_ia(texto):
 
 def consultar_ficha_suja_blindada(cnpj_alvo):
     """
-    CONSULTA BLINDADA COM DUPLO DISPARO:
-    Tenta CNPJ limpo. Se falhar, tenta CNPJ formatado.
+    Tenta com CNPJ limpo e CNPJ formatado (Estratégia Dupla).
     """
     cnpj_alvo_limpo = re.sub(r'\D', '', cnpj_alvo)
     cnpj_alvo_formatado = formatar_cnpj(cnpj_alvo_limpo)
@@ -75,13 +74,12 @@ def consultar_ficha_suja_blindada(cnpj_alvo):
     
     lista_final = []
 
-    # --- TENTATIVA 1: Apenas Números ---
+    # TENTATIVA 1: Limpo
     try:
         params = {"cnpjSancionado": cnpj_alvo_limpo, "pagina": 1}
         response = requests.get(url, headers=headers, params=params, timeout=10)
         if response.status_code == 200:
             dados = response.json()
-            # Filtra resultado
             for item in dados:
                 cnpj_api = re.sub(r'\D', '', item.get('pessoa', {}).get('cnpjFormatado', ''))
                 if cnpj_api == cnpj_alvo_limpo:
@@ -89,8 +87,8 @@ def consultar_ficha_suja_blindada(cnpj_alvo):
     except:
         pass
 
-    # --- TENTATIVA 2: Formatado (Se a 1 falhou ou retornou vazio) ---
-    if len(lista_final) == 0:
+    # TENTATIVA 2: Formatado (Se 1 falhou)
+    if not lista_final:
         try:
             params = {"cnpjSancionado": cnpj_alvo_formatado, "pagina": 1}
             response = requests.get(url, headers=headers, params=params, timeout=10)
@@ -159,48 +157,61 @@ elif opcao == "🚫 Consultar Empresa (CNPJ)":
     st.header("Investigação de CNPJ")
     
     with st.form("busca"):
-        cnpj_in = st.text_input("CNPJ:")
+        cnpj_in = st.text_input("CNPJ (Apenas números ou formatado):")
         btn = st.form_submit_button("Identificar e Investigar")
     
     if btn:
         if len(re.sub(r'\D','',cnpj_in)) != 14:
             st.error("CNPJ deve ter 14 dígitos.")
         else:
-            # 1. Tenta pegar Nome (Não bloqueante)
-            with st.spinner("Identificando..."):
+            # 1. TENTA IDENTIFICAR O NOME
+            with st.spinner("Buscando cadastro..."):
                 nome_empresa = buscar_dados_receita(cnpj_in)
             
+            # SE FALHAR O NOME, NÃO PARA O CÓDIGO!
             if not nome_empresa:
-                nome_empresa = "Razão Social Não Localizada (CNPJ Baixado ou Antigo)"
-                st.warning("⚠️ Nome da empresa não encontrado na base pública (provavelmente baixada), mas a auditoria continuará.")
+                nome_empresa = "Razão Social Não Disponível (CNPJ Baixado/Antigo)"
+                st.warning("⚠️ O nome da empresa não foi encontrado na base pública (possível CNPJ baixado). O sistema forçará a busca por sanções.")
             else:
-                st.success(f"🏢 Empresa: **{nome_empresa}**")
+                st.success(f"🏢 Empresa Identificada: **{nome_empresa}**")
             
             st.session_state['nome_empresa_atual'] = nome_empresa
 
-            # 2. Busca Sanções (Duplo Disparo)
-            with st.spinner("Varrendo bases do governo (Tentativa Dupla)..."):
+            # 2. EXECUTA A BUSCA DE SANÇÕES (SEMPRE)
+            with st.spinner("Varrendo Lista Negra do Governo..."):
                 resultado_real = consultar_ficha_suja_blindada(cnpj_in)
                 st.session_state['dados_busca'] = resultado_real
                 st.session_state['cnpj_atual'] = cnpj_in
 
+    # EXIBIÇÃO DOS RESULTADOS
     if st.session_state['dados_busca'] is not None:
-        sancoes = st.session_state['dados_busca']
-        nome = st.session_state['nome_empresa_atual']
-        
-        # Só exibe se for o mesmo CNPJ da busca atual
-        if re.sub(r'\D','', st.session_state['cnpj_atual']) == re.sub(r'\D','', cnpj_in):
+        # Check de segurança (se o CNPJ da tela é o mesmo da memória)
+        input_limpo = re.sub(r'\D','', cnpj_in)
+        memoria_limpo = re.sub(r'\D','', st.session_state['cnpj_atual'])
+
+        if input_limpo == memoria_limpo:
+            sancoes = st.session_state['dados_busca']
+            nome = st.session_state['nome_empresa_atual']
+            
             if len(sancoes) == 0:
                 st.divider()
-                st.success(f"✅ NADA CONSTA: {nome}")
-                st.markdown("Nenhuma sanção ativa encontrada nas duas tentativas de busca.")
+                st.success(f"✅ NADA CONSTA")
+                st.markdown(f"O CNPJ **{st.session_state['cnpj_atual']}** ({nome}) foi auditado e está limpo no CEIS.")
             else:
                 st.divider()
-                st.error(f"🚨 ALERTA: {len(sancoes)} PROCESSOS ENCONTRADOS!")
-                st.write(f"**Alvo:** {nome}")
+                st.error(f"🚨 ALERTA VERMELHO: {len(sancoes)} SANÇÕES ENCONTRADAS!")
+                st.write(f"**Entidade:** {nome}")
                 
-                pdf = gerar_pdf(st.session_state['cnpj_atual'], nome, sancoes)
-                st.download_button("📥 Baixar Dossiê", data=pdf, file_name="auditoria_alerta.pdf")
-                
-                for s in sancoes:
-                    st.write(f"**Motivo:** {s.get('fundamentacao',[{}])[0].get('descricao','-')}")
+                # Gera PDF
+                try:
+                    pdf = gerar_pdf(st.session_state['cnpj_atual'], nome, sancoes)
+                    st.download_button("📥 Baixar Dossiê Completo (PDF)", data=pdf, file_name="relatorio_auditoria.pdf")
+                except:
+                    st.warning("Não foi possível gerar o PDF, veja os dados abaixo.")
+
+                # Lista detalhes
+                for i, s in enumerate(sancoes):
+                    with st.expander(f"🔴 Processo #{i+1}"):
+                        st.write(f"**Motivo:** {s.get('fundamentacao',[{}])[0].get('descricao','-')}")
+                        st.write(f"**Data:** {s.get('dataPublicacaoSancao','-')}")
+                        st.json(s)
