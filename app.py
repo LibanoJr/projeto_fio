@@ -63,54 +63,40 @@ def analisar_ia(texto):
         return "Erro IA."
 
 def consultar_ficha_suja_blindada(cnpj_alvo):
-    # Limpa o CNPJ alvo para comparar apenas números
+    # Limpa o CNPJ alvo para ficar só números
     cnpj_alvo_limpo = re.sub(r'\D', '', cnpj_alvo)
     
-    # URL Oficial
     url = "https://api.portaldatransparencia.gov.br/api-de-dados/ceis"
     headers = {"chave-api-dados": API_KEY_GOVERNO}
     
-    # Lista para guardar APENAS os resultados verdadeiros
     sancoes_confirmadas = []
 
-    # --- TENTATIVA 1: Enviando apenas números ---
+    # Tenta buscar
     try:
         params = {"cnpjSancionado": cnpj_alvo_limpo, "pagina": 1}
         response = requests.get(url, headers=headers, params=params, timeout=15)
         
         if response.status_code == 200:
             dados = response.json()
-            # O FILTRO DE OURO (GUARDIÃO)
-            for item in dados:
-                # Pega o CNPJ que veio da API
-                cnpj_da_api = item.get('pessoa', {}).get('cnpjFormatado', '')
-                # Limpa ele para comparar
-                cnpj_da_api_limpo = re.sub(r'\D', '', cnpj_da_api)
-                
-                # Só aceita se for IDÊNTICO ao pesquisado
-                if cnpj_da_api_limpo == cnpj_alvo_limpo:
-                    sancoes_confirmadas.append(item)
-    except:
-        pass
-
-    # --- TENTATIVA 2: Se não achou nada, tenta enviar formatado (XX.XXX...) ---
-    if not sancoes_confirmadas:
-        try:
-            # Formata o CNPJ alvo
-            cnpj_alvo_formatado = f"{cnpj_alvo_limpo[:2]}.{cnpj_alvo_limpo[2:5]}.{cnpj_alvo_limpo[5:8]}/{cnpj_alvo_limpo[8:12]}-{cnpj_alvo_limpo[12:]}"
-            params = {"cnpjSancionado": cnpj_alvo_formatado, "pagina": 1}
-            response = requests.get(url, headers=headers, params=params, timeout=15)
             
-            if response.status_code == 200:
-                dados = response.json()
-                for item in dados:
-                    cnpj_da_api = item.get('pessoa', {}).get('cnpjFormatado', '')
-                    cnpj_da_api_limpo = re.sub(r'\D', '', cnpj_da_api)
+            # --- O FILTRO DE DIAMANTE ---
+            for item in dados:
+                # O Governo às vezes coloca o CNPJ em 'pessoa' e às vezes em 'sancionado'
+                # Vamos tentar pegar de todos os lugares possíveis
+                cnpj_api_1 = item.get('pessoa', {}).get('cnpjFormatado', '')
+                cnpj_api_2 = item.get('sancionado', {}).get('codigoFormatado', '')
+                
+                # Limpa o que veio da API
+                c1 = re.sub(r'\D', '', str(cnpj_api_1))
+                c2 = re.sub(r'\D', '', str(cnpj_api_2))
+                
+                # Se ALGUM deles for igual ao nosso alvo, é bingo!
+                if c1 == cnpj_alvo_limpo or c2 == cnpj_alvo_limpo:
+                    sancoes_confirmadas.append(item)
                     
-                    if cnpj_da_api_limpo == cnpj_alvo_limpo:
-                        sancoes_confirmadas.append(item)
-        except:
-            pass
+    except Exception as e:
+        # Silencioso para não poluir a tela, mas registra erro interno se precisar
+        pass
 
     return sancoes_confirmadas
 
@@ -196,7 +182,7 @@ elif opcao == "🚫 Consultar Empresa (CNPJ)":
 
     # EXIBIÇÃO DOS RESULTADOS
     if st.session_state['dados_busca'] is not None:
-        # Check de segurança (se o CNPJ da tela é o mesmo da memória)
+        # Check de segurança visual
         input_limpo = re.sub(r'\D','', cnpj_in)
         memoria_limpo = re.sub(r'\D','', st.session_state['cnpj_atual'])
 
@@ -207,22 +193,28 @@ elif opcao == "🚫 Consultar Empresa (CNPJ)":
             if len(sancoes) == 0:
                 st.divider()
                 st.success(f"✅ NADA CONSTA")
-                st.markdown(f"O CNPJ **{st.session_state['cnpj_atual']}** ({nome}) foi auditado e está limpo no CEIS.")
+                st.markdown(f"O CNPJ **{formatar_cnpj(st.session_state['cnpj_atual'])}** foi auditado e não possui registros ativos no CEIS.")
             else:
                 st.divider()
                 st.error(f"🚨 ALERTA VERMELHO: {len(sancoes)} SANÇÕES ENCONTRADAS!")
                 st.write(f"**Entidade:** {nome}")
                 
-                # Gera PDF
+                # Botão de PDF
                 try:
                     pdf = gerar_pdf(st.session_state['cnpj_atual'], nome, sancoes)
-                    st.download_button("📥 Baixar Dossiê Completo (PDF)", data=pdf, file_name="relatorio_auditoria.pdf")
+                    st.download_button("📥 Baixar Dossiê (PDF)", data=pdf, file_name="relatorio_auditoria.pdf")
                 except:
-                    st.warning("Não foi possível gerar o PDF, veja os dados abaixo.")
+                    st.warning("Erro ao gerar PDF.")
 
-                # Lista detalhes
+                # Lista Limpa (SEM JSON BRUTO)
                 for i, s in enumerate(sancoes):
-                    with st.expander(f"🔴 Processo #{i+1}"):
-                        st.write(f"**Motivo:** {s.get('fundamentacao',[{}])[0].get('descricao','-')}")
-                        st.write(f"**Data:** {s.get('dataPublicacaoSancao','-')}")
-                        st.json(s)
+                    # Tenta pegar o motivo de forma segura
+                    motivo = s.get('fundamentacao', [{}])[0].get('descricao', 'Motivo não detalhado')
+                    orgao = s.get('orgaoSancionador', {}).get('nome', 'Órgão não informado')
+                    data_sancao = s.get('dataPublicacaoSancao', 'Data desconhecida')
+
+                    with st.expander(f"🔴 Sanção #{i+1} - {orgao}"):
+                        st.markdown(f"**Data:** {data_sancao}")
+                        st.markdown(f"**Motivo:** {motivo}")
+                        st.markdown(f"**Órgão:** {orgao}")
+                        # JSON removido daqui para não irritar
