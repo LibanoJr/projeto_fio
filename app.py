@@ -14,7 +14,8 @@ import io
 st.set_page_config(page_title="Auditoria IA - Gov", page_icon="⚖️", layout="wide")
 load_dotenv()
 
-API_KEY_GOVERNO = "d03ede6b6072b78e6df678b6800d4ba1"
+# Configuração de Chaves (Use st.secrets em produção para segurança)
+API_KEY_GOVERNO = os.getenv("API_KEY_GOVERNO") or "d03ede6b6072b78e6df678b6800d4ba1"
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
 # --- SESSION STATE ---
@@ -29,7 +30,7 @@ if 'nome_empresa_atual' not in st.session_state:
 
 def formatar_cnpj(cnpj_limpo):
     """Transforma 12345678000199 em 12.345.678/0001-99"""
-    if len(cnpj_limpo) != 14:
+    if not cnpj_limpo or len(cnpj_limpo) != 14:
         return cnpj_limpo
     return f"{cnpj_limpo[:2]}.{cnpj_limpo[2:5]}.{cnpj_limpo[5:8]}/{cnpj_limpo[8:12]}-{cnpj_limpo[12:]}"
 
@@ -79,6 +80,7 @@ def consultar_ficha_suja_blindada(cnpj_alvo):
 
     with st.expander(f"🕵️ Log de Rastreamento ({cnpj_formatado})"):
         for base in bases:
+            # URL: Usa cnpjSancionado para tentar pegar exato
             url = f"https://api.portaldatransparencia.gov.br/api-de-dados/{base}"
             st.write(f"📡 Conectando na base **{base.upper()}**...")
             
@@ -90,20 +92,35 @@ def consultar_ficha_suja_blindada(cnpj_alvo):
                     dados = response.json()
                     st.write(f"✅ {base.upper()}: Retornou {len(dados)} registros brutos.")
                     
-                    # FILTRO DE SEGURANÇA
-                    for item in dados:
-                        cnpj_voltou = item.get('pessoa', {}).get('cnpjFormatado', '') or item.get('sancionado', {}).get('codigoFormatado', '')
-                        cnpj_voltou_limpo = re.sub(r'\D', '', str(cnpj_voltou))
+                    if len(dados) > 0:
+                        # FILTRO INTELIGENTE (ATUALIZADO)
+                        count_match = 0
+                        for item in dados:
+                            # Tenta pegar CNPJ de todos os lugares possíveis no JSON
+                            cnpj_voltou = (item.get('pessoa', {}).get('cnpjFormatado') or 
+                                           item.get('sancionado', {}).get('codigoFormatado') or "")
+                            
+                            cnpj_voltou_limpo = re.sub(r'\D', '', str(cnpj_voltou))
+                            
+                            # LÓGICA DE CORREÇÃO:
+                            # Verifica se é IGUAL (14 digitos) OU se a RAIZ (8 digitos) é a mesma
+                            raiz_input = cnpj_limpo[:8]
+                            raiz_voltou = cnpj_voltou_limpo[:8]
+
+                            if cnpj_voltou_limpo == cnpj_limpo or raiz_voltou == raiz_input:
+                                item['origem_dado'] = base.upper()
+                                sancoes_confirmadas.append(item)
+                                count_match += 1
                         
-                        if cnpj_voltou_limpo == cnpj_limpo:
-                            # Adiciona uma etiqueta para sabermos de onde veio
-                            item['origem_dado'] = base.upper()
-                            sancoes_confirmadas.append(item)
-                            st.write(f"🔴 ALVO CONFIRMADO EM {base.upper()}!")
+                        if count_match > 0:
+                            st.write(f"🔴 {count_match} registros confirmados pela RAIZ do CNPJ!")
+                        else:
+                            st.warning(f"⚠️ {len(dados)} registros vieram, mas nenhum bateu com a raiz {cnpj_limpo[:8]}.")
+
                 else:
-                    st.write(f"⚠️ {base.upper()}: Falha {response.status_code}")
+                    st.write(f"⚠️ {base.upper()}: Falha HTTP {response.status_code}")
             except Exception as e:
-                st.write(f"❌ Erro em {base.upper()}: {e}")
+                st.write(f"❌ Erro Técnico em {base.upper()}: {e}")
 
     return sancoes_confirmadas
 
@@ -116,21 +133,28 @@ def gerar_pdf(cnpj, nome, dados):
     elements.append(Paragraph(f"RELATÓRIO DE AUDITORIA", styles['Title']))
     elements.append(Spacer(1, 12))
     elements.append(Paragraph(f"<b>Empresa:</b> {nome}", styles['Normal']))
-    elements.append(Paragraph(f"<b>CNPJ:</b> {cnpj}", styles['Normal']))
+    elements.append(Paragraph(f"<b>CNPJ Auditado:</b> {formatar_cnpj(cnpj)}", styles['Normal']))
     elements.append(Spacer(1, 20))
     
-    data = [["Sanção", "Órgão", "Data"]]
+    data = [["Base", "Órgão Sancionador", "Data", "Motivo"]]
     for d in dados:
-        tipo = d.get('tipoSancao',{}).get('descricaoResumida','Unknown')[:40]
-        orgao = d.get('orgaoSancionador',{}).get('nome','Unknown')[:30]
+        origem = d.get('origem_dado', 'GOV')
+        orgao = d.get('orgaoSancionador',{}).get('nome','Unknown')[:20]
         data_pub = d.get('dataPublicacaoSancao', '-')
-        data.append([tipo, orgao, data_pub])
         
-    t = Table(data, colWidths=[200, 180, 80])
+        # Tenta achar motivo
+        motivo = "Não informado"
+        if 'fundamentacao' in d and d['fundamentacao']:
+             motivo = d['fundamentacao'][0].get('descricao', '')[:30]
+        
+        data.append([origem, orgao, data_pub, motivo])
+        
+    t = Table(data, colWidths=[50, 150, 70, 200])
     t.setStyle(TableStyle([
         ('BACKGROUND', (0,0), (-1,0), colors.darkred),
         ('TEXTCOLOR', (0,0), (-1,0), colors.white),
-        ('GRID', (0,0), (-1,-1), 1, colors.black)
+        ('GRID', (0,0), (-1,-1), 1, colors.black),
+        ('FONTSIZE', (0,0), (-1,-1), 8)
     ]))
     elements.append(t)
     doc.build(elements)
@@ -145,7 +169,7 @@ if st.sidebar.button("🗑️ Nova Consulta"):
 
 opcao = st.sidebar.radio("Opção:", ["🔍 Analisar Contratos", "🚫 Consultar Empresa (CNPJ)"])
 
-st.title("🏛️ Sistema de Compliance V2 (ATUALIZADO)")
+st.title("🏛️ Sistema de Compliance V2.1 (FIX)")
 
 if opcao == "🔍 Analisar Contratos":
     if st.button("Buscar Contratos MEC"):
@@ -172,20 +196,19 @@ elif opcao == "🚫 Consultar Empresa (CNPJ)":
             with st.spinner("Buscando cadastro..."):
                 nome_empresa = buscar_dados_receita(cnpj_in)
             
-            # SE FALHAR O NOME, NÃO PARA O CÓDIGO!
             if not nome_empresa:
-                nome_empresa = "Razão Social Não Disponível (CNPJ Baixado/Antigo)"
-                st.warning("⚠️ O nome da empresa não foi encontrado na base pública (possível CNPJ baixado). O sistema forçará a busca por sanções.")
+                nome_empresa = "Razão Social Não Disponível (CNPJ Baixado ou Instável)"
+                st.warning("⚠️ Nome não encontrado na base pública. O sistema forçará a busca por sanções pelo número.")
             else:
                 st.success(f"🏢 Empresa Identificada: **{nome_empresa}**")
             
             st.session_state['nome_empresa_atual'] = nome_empresa
 
             # 2. EXECUTA A BUSCA DE SANÇÕES (SEMPRE)
-            with st.spinner("Varrendo Lista Negra do Governo..."):
-                resultado_real = consultar_ficha_suja_blindada(cnpj_in)
-                st.session_state['dados_busca'] = resultado_real
-                st.session_state['cnpj_atual'] = cnpj_in
+            # AQUI ESTÁ A MÁGICA: Ele vai varrer e aceitar raiz
+            resultado_real = consultar_ficha_suja_blindada(cnpj_in)
+            st.session_state['dados_busca'] = resultado_real
+            st.session_state['cnpj_atual'] = cnpj_in
 
    # EXIBIÇÃO DOS RESULTADOS
     if st.session_state['dados_busca'] is not None:
@@ -200,26 +223,32 @@ elif opcao == "🚫 Consultar Empresa (CNPJ)":
             if len(sancoes) == 0:
                 st.divider()
                 st.success(f"✅ NADA CONSTA")
-                st.markdown(f"O CNPJ **{formatar_cnpj(st.session_state['cnpj_atual'])}** foi auditado e não possui registros ativos no CEIS.")
+                st.markdown(f"O CNPJ **{formatar_cnpj(st.session_state['cnpj_atual'])}** foi auditado. Nenhuma sanção vinculada à raiz deste CNPJ foi encontrada.")
             else:
                 st.divider()
                 st.error(f"🚨 ALERTA VERMELHO: {len(sancoes)} SANÇÕES ENCONTRADAS!")
                 st.markdown(f"**Empresa:** {nome}")
-                st.markdown(f"**CNPJ:** {formatar_cnpj(st.session_state['cnpj_atual'])}")
+                st.markdown(f"**CNPJ Consultado:** {formatar_cnpj(st.session_state['cnpj_atual'])}")
                 
                 # Tenta gerar PDF
                 try:
                     pdf = gerar_pdf(st.session_state['cnpj_atual'], nome, sancoes)
-                    st.download_button("📥 Baixar Dossiê (PDF)", data=pdf, file_name="relatorio_auditoria.pdf")
-                except:
-                    pass
+                    st.download_button("📥 Baixar Dossiê (PDF)", data=pdf, file_name="relatorio_auditoria.pdf", mime='application/pdf')
+                except Exception as e:
+                    st.error(f"Erro ao gerar PDF: {e}")
 
                 # LISTAGEM LIMPA DOS PROCESSOS
                 for i, s in enumerate(sancoes):
                     orgao = s.get('orgaoSancionador', {}).get('nome', 'Órgão não informado')
-                    motivo = s.get('fundamentacao', [{}])[0].get('descricao', 'Não detalhado')
+                    # Tenta pegar motivo de vários lugares
+                    motivo = "Não detalhado"
+                    if 'fundamentacao' in s and s['fundamentacao']:
+                         motivo = s['fundamentacao'][0].get('descricao', '')
+                    elif 'tipoSancao' in s:
+                         motivo = s['tipoSancao'].get('descricaoResumida', '')
+
                     data_pub = s.get('dataPublicacaoSancao', '-')
-                    origem = s.get('origem_dado', 'CEIS') # Pega a origem ou assume CEIS
+                    origem = s.get('origem_dado', 'CEIS') 
                     
                     with st.expander(f"🔴 Sanção {i+1} ({origem}) - {orgao}"):
                         st.markdown(f"**Base de Dados:** {origem}")
