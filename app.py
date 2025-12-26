@@ -9,6 +9,7 @@ from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet
 import io
+import urllib.parse
 
 # --- CONFIGURAÇÃO ---
 st.set_page_config(page_title="Auditoria IA - Gov", page_icon="⚖️", layout="wide")
@@ -55,73 +56,78 @@ def buscar_contratos():
     except:
         return []
 
-def analisar_ia(texto):
-    modelo = genai.GenerativeModel("gemini-pro")
-    try:
-        return modelo.generate_content(f"Auditoria resumida deste objeto de contrato: {texto}").text
-    except:
-        return "Erro IA."
-
-def consultar_ficha_suja_blindada(cnpj_alvo):
-    # 1. Preparação
+def consultar_ficha_suja_force_brute(cnpj_alvo):
+    """
+    Tenta várias formas de pedir o dado para a API até ela respeitar o filtro.
+    """
     cnpj_limpo = re.sub(r'\D', '', cnpj_alvo)
     if len(cnpj_limpo) != 14:
         return []
 
-    # CNPJ formatado é essencial para a API, mas a codificação da URL pode quebrar
     cnpj_formatado = f"{cnpj_limpo[:2]}.{cnpj_limpo[2:5]}.{cnpj_limpo[5:8]}/{cnpj_limpo[8:12]}-{cnpj_limpo[12:]}"
-    
-    headers = {"chave-api-dados": API_KEY_GOVERNO, "accept": "*/*"}
+    headers = {"chave-api-dados": API_KEY_GOVERNO, "accept": "application/json"}
     sancoes_confirmadas = []
     bases = ["ceis", "cnep"]
 
-    with st.expander(f"🕵️ Log Técnico ({cnpj_formatado})"):
+    with st.expander(f"🕵️ Log Técnico Detalhado ({cnpj_formatado})"):
         for base in bases:
             base_url = f"https://api.portaldatransparencia.gov.br/api-de-dados/{base}"
+            sucesso_filtro = False # Flag para saber se a API obedeceu
             
-            # --- CORREÇÃO DE URL (A Mágica acontece aqui) ---
-            # Construímos a URL manualmente para garantir que a "/" não vire "%2F"
-            # e forçamos a string exata que o governo espera.
-            url_final = f"{base_url}?cnpjSancionado={cnpj_formatado}&pagina=1"
-            
-            st.write(f"📡 Consultando **{base.upper()}**...")
-            
-            try:
-                # Nota: Não usamos 'params=' aqui, usamos a url_final direta
-                response = requests.get(url_final, headers=headers, timeout=15)
-                
-                if response.status_code == 200:
-                    dados = response.json()
-                    
-                    # Se vier vazio, é SUCESSO (Empresa Limpa)
-                    if len(dados) == 0:
-                        st.write(f"✅ {base.upper()}: Base retornou 0 registros (Limpo).")
-                    else:
-                        # Se vier algo, precisamos ver se é o "lixo" padrão ou o nosso alvo
-                        match_encontrado = False
-                        for item in dados:
-                            # Tenta extrair CNPJ de qualquer lugar do JSON
-                            cnpj_voltou = (item.get('pessoa', {}).get('cnpjFormatado') or 
-                                           item.get('sancionado', {}).get('codigoFormatado') or "")
-                            
-                            cnpj_voltou_limpo = re.sub(r'\D', '', str(cnpj_voltou))
-                            
-                            # Compara Raiz (8 primeiros) ou Tudo (14)
-                            if cnpj_voltou_limpo == cnpj_limpo or (len(cnpj_voltou_limpo) >= 8 and cnpj_voltou_limpo[:8] == cnpj_limpo[:8]):
-                                item['origem_dado'] = base.upper()
-                                sancoes_confirmadas.append(item)
-                                match_encontrado = True
-                        
-                        if match_encontrado:
-                            st.write(f"🔴 **{base.upper()}:** Encontramos registros confirmados!")
-                        else:
-                            # Se retornou 15 mas nenhum bateu, a API ignorou o filtro
-                            st.write(f"⚠️ {base.upper()}: API retornou lista genérica (Erro de filtro da API).")
+            # --- ESTRATÉGIA "FORCE BRUTE": Tenta 3 variações de URL ---
+            tentativas = [
+                # 1. URL Montada Manualmente (Evita encode do requests)
+                (f"{base_url}?cnpjSancionado={cnpj_formatado}&pagina=1", "Manual Formatado"),
+                # 2. URL Manual Apenas Números
+                (f"{base_url}?cnpjSancionado={cnpj_limpo}&pagina=1", "Manual Limpo"),
+                # 3. Via Params (Padrão Requests - Encode %2F)
+                (base_url, "Params Padrão") 
+            ]
 
-                else:
-                    st.write(f"⚠️ {base.upper()}: Erro {response.status_code}")
-            except Exception as e:
-                st.write(f"❌ Falha: {e}")
+            for url_teste, metodo in tentativas:
+                if sucesso_filtro: break # Se já funcionou, pula as outras tentativas
+                
+                try:
+                    if metodo == "Params Padrão":
+                        response = requests.get(url_teste, headers=headers, params={"cnpjSancionado": cnpj_formatado, "pagina": 1}, timeout=10)
+                    else:
+                        response = requests.get(url_teste, headers=headers, timeout=10)
+
+                    if response.status_code == 200:
+                        dados = response.json()
+                        
+                        # ANÁLISE DO RETORNO
+                        if len(dados) == 0:
+                            # Se voltou [], a API OBDECEU o filtro e não achou nada. SUCESSO.
+                            st.write(f"✅ {base.upper()} ({metodo}): Filtro aceito. Retorno vazio (Limpo).")
+                            sucesso_filtro = True
+                        else:
+                            # Se voltou dados, precisamos ver se é lixo ou ouro
+                            match_count = 0
+                            for item in dados:
+                                # Extração segura do CNPJ
+                                c_volta = (item.get('pessoa', {}).get('cnpjFormatado') or item.get('sancionado', {}).get('codigoFormatado') or "")
+                                c_limpo_volta = re.sub(r'\D', '', str(c_volta))
+                                
+                                # Verifica Raiz (8 digitos)
+                                if c_limpo_volta.startswith(cnpj_limpo[:8]):
+                                    match_count += 1
+                                    item['origem_dado'] = base.upper()
+                                    if item not in sancoes_confirmadas:
+                                        sancoes_confirmadas.append(item)
+                            
+                            if match_count > 0:
+                                st.write(f"🚨 {base.upper()} ({metodo}): ALVO ENCONTRADO! ({match_count} sanções)")
+                                sucesso_filtro = True
+                            else:
+                                # Se voltou 15 itens e nenhum bateu, a API ignorou o filtro. Tenta o próximo método.
+                                st.write(f"⚠️ {base.upper()} ({metodo}): API ignorou filtro (Lista genérica). Tentando outro método...")
+
+                except Exception as e:
+                    st.write(f"❌ Erro em {metodo}: {e}")
+
+            if not sucesso_filtro:
+                st.write(f"⚠️ {base.upper()}: Falha em todas as tentativas de conexão.")
 
     return sancoes_confirmadas
 
@@ -169,7 +175,7 @@ if st.sidebar.button("🗑️ Nova Consulta"):
 
 opcao = st.sidebar.radio("Opção:", ["🔍 Analisar Contratos", "🚫 Consultar Empresa (CNPJ)"])
 
-st.title("🏛️ Sistema de Compliance V3.0 (URL Fix)")
+st.title("🏛️ Sistema de Compliance V4.0 (Force Brute)")
 
 if opcao == "🔍 Analisar Contratos":
     if st.button("Buscar Contratos MEC"):
@@ -179,7 +185,7 @@ if opcao == "🔍 Analisar Contratos":
             for c in contratos[:2]:
                 with st.expander(f"Contrato R$ {c.get('valorInicialCompra')}"):
                     st.write(c.get('objeto'))
-                    st.info(analisar_ia(c.get('objeto')))
+                    st.info(genai.GenerativeModel("gemini-pro").generate_content(f"Resuma: {c.get('objeto')}").text)
 
 elif opcao == "🚫 Consultar Empresa (CNPJ)":
     st.header("Investigação de CNPJ")
@@ -189,62 +195,50 @@ elif opcao == "🚫 Consultar Empresa (CNPJ)":
         btn = st.form_submit_button("Identificar e Investigar")
     
     if btn:
-        if len(re.sub(r'\D','',cnpj_in)) != 14:
+        cnpj_numeros = re.sub(r'\D','',cnpj_in)
+        if len(cnpj_numeros) != 14:
             st.error("CNPJ deve ter 14 dígitos.")
         else:
             with st.spinner("Buscando cadastro..."):
                 nome_empresa = buscar_dados_receita(cnpj_in)
             
             if not nome_empresa:
-                nome_empresa = "Razão Social Não Disponível"
-                st.warning("⚠️ Nome não encontrado. O sistema buscará apenas sanções.")
+                nome_empresa = "Razão Social Não Disponível (CNPJ Baixado/Inativo)"
+                st.warning("⚠️ Nome não encontrado. Prosseguindo com varredura de sanções.")
             else:
                 st.success(f"🏢 Empresa Identificada: **{nome_empresa}**")
             
             st.session_state['nome_empresa_atual'] = nome_empresa
+            st.session_state['cnpj_atual'] = cnpj_in
 
-            with st.spinner("Varrendo Bases Governamentais..."):
-                resultado_real = consultar_ficha_suja_blindada(cnpj_in)
+            with st.spinner("Varrendo Bases Governamentais (Modo Force Brute)..."):
+                resultado_real = consultar_ficha_suja_force_brute(cnpj_in)
                 st.session_state['dados_busca'] = resultado_real
-                st.session_state['cnpj_atual'] = cnpj_in
 
-   # EXIBIÇÃO
+    # EXIBIÇÃO
     if st.session_state['dados_busca'] is not None:
-        input_limpo = re.sub(r'\D','', cnpj_in)
-        memoria_limpo = re.sub(r'\D','', st.session_state['cnpj_atual'])
-
-        if input_limpo == memoria_limpo:
-            sancoes = st.session_state['dados_busca']
-            nome = st.session_state['nome_empresa_atual']
+        sancoes = st.session_state['dados_busca']
+        nome = st.session_state['nome_empresa_atual']
+        
+        st.divider()
+        if len(sancoes) == 0:
+            st.success(f"✅ NADA CONSTA (VALIDADO)")
+            st.markdown(f"O CNPJ **{formatar_cnpj(st.session_state['cnpj_atual'])}** passou por todas as camadas de verificação e não possui sanções ativas.")
+        else:
+            st.error(f"🚨 ALERTA VERMELHO: {len(sancoes)} SANÇÕES ENCONTRADAS!")
+            st.markdown(f"**Empresa:** {nome}")
             
-            if len(sancoes) == 0:
-                st.divider()
-                st.success(f"✅ NADA CONSTA")
-                st.markdown(f"O CNPJ **{formatar_cnpj(st.session_state['cnpj_atual'])}** foi auditado. Nenhuma sanção ativa encontrada.")
-            else:
-                st.divider()
-                st.error(f"🚨 ALERTA VERMELHO: {len(sancoes)} SANÇÕES ENCONTRADAS!")
-                st.markdown(f"**Empresa:** {nome}")
-                st.markdown(f"**CNPJ Consultado:** {formatar_cnpj(st.session_state['cnpj_atual'])}")
+            try:
+                pdf = gerar_pdf(st.session_state['cnpj_atual'], nome, sancoes)
+                st.download_button("📥 Baixar Dossiê (PDF)", data=pdf, file_name="relatorio_auditoria.pdf", mime='application/pdf')
+            except:
+                st.error("Erro ao gerar PDF.")
+
+            for i, s in enumerate(sancoes):
+                orgao = s.get('orgaoSancionador', {}).get('nome', 'Órgão não informado')
+                motivo = "Não detalhado"
+                if 'fundamentacao' in s and s['fundamentacao']:
+                        motivo = s['fundamentacao'][0].get('descricao', '')
                 
-                try:
-                    pdf = gerar_pdf(st.session_state['cnpj_atual'], nome, sancoes)
-                    st.download_button("📥 Baixar Dossiê (PDF)", data=pdf, file_name="relatorio_auditoria.pdf", mime='application/pdf')
-                except Exception as e:
-                    st.error(f"Erro ao gerar PDF: {e}")
-
-                for i, s in enumerate(sancoes):
-                    orgao = s.get('orgaoSancionador', {}).get('nome', 'Órgão não informado')
-                    motivo = "Não detalhado"
-                    if 'fundamentacao' in s and s['fundamentacao']:
-                         motivo = s['fundamentacao'][0].get('descricao', '')
-                    elif 'tipoSancao' in s:
-                         motivo = s['tipoSancao'].get('descricaoResumida', '')
-
-                    data_pub = s.get('dataPublicacaoSancao', '-')
-                    origem = s.get('origem_dado', 'CEIS') 
-                    
-                    with st.expander(f"🔴 Sanção {i+1} ({origem}) - {orgao}"):
-                        st.markdown(f"**Base de Dados:** {origem}")
-                        st.markdown(f"**Data:** {data_pub}")
-                        st.markdown(f"**Motivo:** {motivo}")
+                with st.expander(f"🔴 Sanção {i+1} ({s.get('origem_dado')}) - {orgao}"):
+                    st.write(f"**Motivo:** {motivo}")
