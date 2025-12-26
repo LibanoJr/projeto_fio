@@ -2,6 +2,7 @@ import streamlit as st
 import requests
 import os
 import re
+import urllib3
 from dotenv import load_dotenv
 import io
 from reportlab.lib import colors
@@ -9,220 +10,157 @@ from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet
 
+# Desativa avisos de SSL inseguro (Necessário para APIs Gov.br)
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
 # --- CONFIGURAÇÃO ---
-st.set_page_config(page_title="Auditoria Gov V7", page_icon="🕵️", layout="wide")
+st.set_page_config(page_title="Auditoria V8 - Raw", page_icon="☢️", layout="wide")
 load_dotenv()
 
-# API Key Pública (fallback)
-API_KEY_GOVERNO = os.getenv("API_KEY_GOVERNO") or "d03ede6b6072b78e6df678b6800d4ba1"
+API_KEY = os.getenv("API_KEY_GOVERNO") or "d03ede6b6072b78e6df678b6800d4ba1"
 
 # --- FUNÇÕES ---
 
-def limpar_string_cnpj(texto):
-    """Remove pontuação e deixa apenas números."""
-    return re.sub(r'\D', '', str(texto))
+def limpar_cnpj(cnpj):
+    return re.sub(r'\D', '', str(cnpj))
 
-def formatar_cnpj(cnpj_limpo):
-    if len(cnpj_limpo) != 14: return cnpj_limpo
-    return f"{cnpj_limpo[:2]}.{cnpj_limpo[2:5]}.{cnpj_limpo[5:8]}/{cnpj_limpo[8:12]}-{cnpj_limpo[12:]}"
+def formatar_cnpj(cnpj):
+    c = limpar_cnpj(cnpj)
+    if len(c) != 14: return c
+    return f"{c[:2]}.{c[2:5]}.{c[5:8]}/{c[8:12]}-{c[12:]}"
 
-def obter_nome_limpo(cnpj):
-    """
-    Busca na BrasilAPI e limpa o nome para evitar que o CNPJ venha junto.
-    Ex: '12345 EMPRESA X' vira 'EMPRESA X' e o termo vira 'EMPRESA'.
-    """
+def get_company_name(cnpj):
     try:
         url = f"https://brasilapi.com.br/api/cnpj/v1/{cnpj}"
-        response = requests.get(url, timeout=5)
-        if response.status_code == 200:
-            dados = response.json()
-            razao_bruta = dados.get('razao_social', '') or dados.get('nome_fantasia', '')
-            
-            # REMOVE NÚMEROS DO NOME (O PULO DO GATO)
-            nome_sem_numeros = re.sub(r'\d+', '', razao_bruta).replace('.', '').replace('-', '').strip()
-            
-            # Pega o primeiro nome significativo (maior que 2 letras)
-            partes = nome_sem_numeros.split()
-            termo_busca = ""
-            for p in partes:
-                if len(p) > 2:
-                    termo_busca = p
-                    break
-            
-            return razao_bruta, termo_busca
+        resp = requests.get(url, timeout=5)
+        if resp.status_code == 200:
+            data = resp.json()
+            # Retorna Razão Social e Nome Fantasia
+            return data.get('razao_social', ''), data.get('nome_fantasia', '')
     except:
         pass
     return None, None
 
-def consultar_base_detalhada(termo_nome, cnpj_alvo_limpo, base):
+def consultar_api_gov_brute(termo_busca, tipo_busca, base):
+    """
+    tipo_busca: 'cnpj' ou 'nome'
+    """
     url = f"https://api.portaldatransparencia.gov.br/api-de-dados/{base}"
-    headers = {"chave-api-dados": API_KEY_GOVERNO}
-    params = {"nomeSancionado": termo_nome, "pagina": 1}
     
-    log_tentativa = {"base": base, "termo": termo_nome, "retorno_api_qtd": 0, "matches": []}
+    headers = {
+        "chave-api-dados": API_KEY,
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+        "Accept": "application/json"
+    }
     
-    try:
-        response = requests.get(url, headers=headers, params=params, timeout=15)
-        
-        if response.status_code == 200:
-            dados = response.json()
-            log_tentativa["retorno_api_qtd"] = len(dados)
-            
-            # Filtragem Inteligente
-            for item in dados:
-                # Tenta achar o CNPJ em vários lugares do JSON
-                cnpj_encontrado = ""
-                
-                # 1. Tenta campo pessoa
-                if 'pessoa' in item and 'cnpjFormatado' in item['pessoa']:
-                    cnpj_encontrado = item['pessoa']['cnpjFormatado']
-                
-                # 2. Tenta campo sancionado
-                elif 'sancionado' in item and 'codigoFormatado' in item['sancionado']:
-                    val = item['sancionado']['codigoFormatado']
-                    if len(val) > 11: # Filtra CPFs
-                        cnpj_encontrado = val
-                
-                cnpj_item_limpo = limpar_string_cnpj(cnpj_encontrado)
-                
-                # COMPARAÇÃO (Raiz do CNPJ - 8 primeiros dígitos)
-                match = False
-                if cnpj_item_limpo.startswith(cnpj_alvo_limpo[:8]):
-                    match = True
-                
-                # Salva para debug
-                item_resumo = {
-                    "nome_na_lista": item.get('sancionado', {}).get('nome', 'N/D'),
-                    "cnpj_na_lista": cnpj_encontrado,
-                    "match": match,
-                    "dados_completos": item
-                }
-                
-                if match:
-                    log_tentativa["matches"].append(item_resumo)
-                    
-    except Exception as e:
-        log_tentativa["erro"] = str(e)
-        
-    return log_tentativa
-
-def gerar_pdf(cnpj, nome, logs):
-    buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=letter)
-    elements = []
-    styles = getSampleStyleSheet()
+    params = {"pagina": 1}
     
-    elements.append(Paragraph(f"DOSSIÊ DE AUDITORIA", styles['Title']))
-    elements.append(Paragraph(f"<b>Alvo:</b> {nome}", styles['Normal']))
-    elements.append(Paragraph(f"<b>CNPJ:</b> {formatar_cnpj(cnpj)}", styles['Normal']))
-    elements.append(Spacer(1, 20))
-    
-    sanctions_found = []
-    for log in logs:
-        for m in log['matches']:
-            sanctions_found.append(m)
-            
-    if not sanctions_found:
-        elements.append(Paragraph("Certificamos que não foram encontradas sanções ativas baseadas nos filtros aplicados.", styles['Normal']))
+    if tipo_busca == 'cnpj':
+        # Tenta enviar formatado, pois a doc pede, mas a API é chata
+        cnpj_fmt = formatar_cnpj(termo_busca)
+        params["cnpjSancionado"] = cnpj_fmt
     else:
-        data = [["Nome na Lista", "CNPJ Vinculado", "Origem"]]
-        for s in sanctions_found:
-            data.append([
-                s['nome_na_lista'][:30],
-                s['cnpj_na_lista'],
-                "Gov Federal"
-            ])
-        t = Table(data)
-        t.setStyle(TableStyle([('GRID', (0,0), (-1,-1), 1, colors.black)]))
-        elements.append(t)
+        params["nomeSancionado"] = termo_busca
+
+    try:
+        # verify=False é CRUCIAL para evitar erro de SSL silencioso do Gov.br
+        response = requests.get(url, headers=headers, params=params, timeout=20, verify=False)
+        return response
+    except Exception as e:
+        return str(e)
+
+def analisar_resultados(lista_resultados, cnpj_alvo_limpo):
+    matches = []
+    if not isinstance(lista_resultados, list):
+        return []
         
-    doc.build(elements)
-    buffer.seek(0)
-    return buffer
+    for item in lista_resultados:
+        # Extrai CNPJ de onde estiver
+        c_formatado = item.get('pessoa', {}).get('cnpjFormatado') or \
+                      item.get('sancionado', {}).get('codigoFormatado') or ""
+        
+        c_limpo = limpar_cnpj(c_formatado)
+        
+        # Match flexível (8 primeiros dígitos)
+        if c_limpo and cnpj_alvo_limpo.startswith(c_limpo[:8]):
+            matches.append(item)
+        elif not c_limpo:
+             # Se não tem CNPJ no item, mas o nome é idêntico (caso raro)
+             matches.append(item)
+             
+    return matches
 
 # --- FRONTEND ---
-st.title("🕵️ Auditoria V7 - Modo Detetive")
-st.markdown("---")
+st.title("☢️ Auditoria V8: Diagnóstico Total")
+st.markdown("Nesta versão, desativei a segurança SSL e vamos testar múltiplas chaves.")
 
-col_in, col_btn = st.columns([3, 1])
-with col_in:
-    cnpj_digitado = st.text_input("CNPJ Alvo:", placeholder="Apenas números")
-with col_btn:
+col1, col2 = st.columns([3, 1])
+with col1:
+    cnpj_input = st.text_input("CNPJ Alvo:", value="")
+with col2:
     st.write("")
     st.write("")
-    consultar = st.button("🔍 Investigar")
+    btn = st.button("Executar Varredura")
 
-if consultar:
-    cnpj_limpo = limpar_string_cnpj(cnpj_digitado)
+if btn and cnpj_input:
+    cnpj_limpo = limpar_cnpj(cnpj_input)
+    st.write(f"🔧 Iniciando para CNPJ: **{formatar_cnpj(cnpj_limpo)}**")
     
-    if len(cnpj_limpo) != 14:
-        st.error("CNPJ Inválido (Necessário 14 dígitos)")
-    else:
-        # 1. Identificação e Limpeza de Nome
-        with st.spinner("Identificando empresa..."):
-            razao_social, termo_busca = obter_nome_limpo(cnpj_limpo)
+    # 1. Pegar Nome
+    razao, fantasia = get_company_name(cnpj_limpo)
+    nomes_para_testar = []
+    if razao: nomes_para_testar.append(razao.split()[0]) # Primeiro nome
+    if fantasia: nomes_para_testar.append(fantasia.split()[0])
+    
+    st.info(f"📋 Cadastro encontrado: **{razao}** ({fantasia})")
+    
+    bases = ["ceis", "cnep"]
+    encontrado_geral = False
+    
+    st.divider()
+    
+    for base in bases:
+        st.subheader(f"📡 Base: {base.upper()}")
         
-        if not razao_social:
-            st.warning("CNPJ não encontrado na base pública (BrasilAPI).")
-            termo_busca = ""
+        # --- ESTRATÉGIA 1: BUSCA POR CNPJ ---
+        resp = consultar_api_gov_brute(cnpj_limpo, 'cnpj', base)
+        
+        if isinstance(resp, str):
+            st.error(f"Erro de conexão: {resp}")
         else:
-            st.success(f"🏢 **{razao_social}**")
-            st.info(f"🔎 Termo limpo usado na busca: **'{termo_busca}'**")
-        
-        # 2. Varredura com Logs
-        if termo_busca:
-            logs_gerais = []
-            bases = ["ceis", "cnep"]
-            total_matches = 0
+            dados = resp.json()
+            url_usada = resp.url
+            status = resp.status_code
             
-            with st.status("Executando Varredura...", expanded=True):
-                for base in bases:
-                    st.write(f"📡 Conectando base **{base.upper()}**...")
-                    resultado = consultar_base_detalhada(termo_busca, cnpj_limpo, base)
-                    logs_gerais.append(resultado)
-                    
-                    matches = len(resultado['matches'])
-                    total_matches += matches
-                    
-                    if matches > 0:
-                        st.error(f"🚨 {base.upper()}: {matches} sanções confirmadas!")
-                    elif resultado['retorno_api_qtd'] > 0:
-                        st.warning(f"⚠️ {base.upper()}: {resultado['retorno_api_qtd']} registros com nome similar, mas CNPJ diferente.")
-                    else:
-                        st.success(f"✅ {base.upper()}: Nenhum registro encontrado para o nome.")
-
-            # 3. Resultado Final
-            st.divider()
+            matches = analisar_resultados(dados, cnpj_limpo)
             
-            if total_matches == 0:
-                st.balloons()
-                st.success("✅ NADA CONSTA (CONFIRMADO)")
-                st.write(f"O sistema buscou por **'{termo_busca}'**, analisou os retornos e nenhum CNPJ bateu com **{formatar_cnpj(cnpj_limpo)}**.")
+            if matches:
+                st.error(f"🚨 ALVO ENCONTRADO VIA CNPJ! ({len(matches)} registros)")
+                st.json(matches)
+                encontrado_geral = True
             else:
-                st.error(f"🚨 ALERTA: {total_matches} SANÇÕES ATIVAS")
-                for log in logs_gerais:
-                    for m in log['matches']:
-                        with st.expander(f"🛑 Detalhe: {m['nome_na_lista']}"):
-                            st.json(m['dados_completos'])
+                st.write(f"🔹 Busca CNPJ retornou {len(dados)} itens genéricos (Falha de filtro da API).")
+                with st.expander("Ver JSON Bruto (CNPJ)"):
+                    st.code(dados)
+
+        # --- ESTRATÉGIA 2: BUSCA POR NOME (BACKUP) ---
+        if not encontrado_geral and nomes_para_testar:
+            termo = nomes_para_testar[0] # Pega o primeiro nome (Ex: BRAISCOMPANY)
+            st.write(f"🔄 Tentando busca por nome: **'{termo}'**")
             
-            # 4. Botão PDF e Link Externo
-            col1, col2 = st.columns(2)
-            with col1:
-                pdf = gerar_pdf(cnpj_limpo, razao_social, logs_gerais)
-                st.download_button("📥 Baixar Relatório Técnico", pdf, "dossie_v7.pdf", "application/pdf")
-            with col2:
-                link_gov = f"https://www.portaltransparencia.gov.br/busca?termo={termo_busca}"
-                st.link_button("🔗 Verificar no Site Oficial (Contraprova)", link_gov)
+            resp_nome = consultar_api_gov_brute(termo, 'nome', base)
+            
+            if not isinstance(resp_nome, str):
+                dados_nome = resp_nome.json()
+                matches_nome = analisar_resultados(dados_nome, cnpj_limpo)
+                
+                if matches_nome:
+                    st.error(f"🚨 ALVO ENCONTRADO VIA NOME! ({len(matches_nome)} registros)")
+                    st.json(matches_nome)
+                    encontrado_geral = True
+                else:
+                    st.success(f"✅ Busca por nome '{termo}' retornou {len(dados_nome)} itens, mas nenhum bateu com o CNPJ alvo.")
+                    with st.expander(f"Ver JSON Bruto (Nome: {termo})"):
+                        st.json(dados_nome)
 
-        else:
-            st.error("Não foi possível extrair um nome válido para busca.")
-
-# --- AREA DE DEBUG (Onde vemos a verdade) ---
-if 'logs_gerais' in locals() and logs_gerais:
-    with st.expander("🛠️ Log Técnico Bruto (Para Debug)"):
-        st.write("Isso mostra o que a API devolveu ANTES do Python filtrar:")
-        for log in logs_gerais:
-            st.write(f"--- Base: {log['base']} ---")
-            st.write(f"Itens recebidos da API: {log['retorno_api_qtd']}")
-            if log['retorno_api_qtd'] > 0 and log['retorno_api_qtd'] < 10:
-                st.json(log) # Mostra JSON se forem poucos itens
+    st.divider()
