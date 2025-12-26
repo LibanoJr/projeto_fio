@@ -63,7 +63,7 @@ def analisar_ia(texto):
         return "Erro IA."
 
 def consultar_ficha_suja_blindada(cnpj_alvo):
-    # Limpa o CNPJ alvo para ficar só números
+    # Limpeza básica
     cnpj_alvo_limpo = re.sub(r'\D', '', cnpj_alvo)
     
     url = "https://api.portaldatransparencia.gov.br/api-de-dados/ceis"
@@ -71,32 +71,42 @@ def consultar_ficha_suja_blindada(cnpj_alvo):
     
     sancoes_confirmadas = []
 
-    # Tenta buscar
+    # Vamos tentar buscar apenas pelos 8 primeiros dígitos (RAIZ DO CNPJ)
+    # Isso ajuda a achar a empresa mesmo se a sanção for na matriz e buscarmos a filial
+    cnpj_raiz = cnpj_alvo_limpo[:8]
+
+    st.warning(f"🕵️ MODO ESPIÃO ATIVADO: Buscando Raiz {cnpj_raiz}...")
+
     try:
+        # Tenta buscar usando a API
         params = {"cnpjSancionado": cnpj_alvo_limpo, "pagina": 1}
         response = requests.get(url, headers=headers, params=params, timeout=15)
         
         if response.status_code == 200:
             dados = response.json()
             
-            # --- O FILTRO DE DIAMANTE ---
+            # --- ÁREA DO ESPIÃO ---
+            st.markdown("### 📋 O que o Governo respondeu (Sem filtros):")
+            if not dados:
+                st.write("O Governo respondeu com uma lista VAZIA [].")
+            
             for item in dados:
-                # O Governo às vezes coloca o CNPJ em 'pessoa' e às vezes em 'sancionado'
-                # Vamos tentar pegar de todos os lugares possíveis
-                cnpj_api_1 = item.get('pessoa', {}).get('cnpjFormatado', '')
-                cnpj_api_2 = item.get('sancionado', {}).get('codigoFormatado', '')
+                # Tenta pegar dados de todos os cantos
+                nome_sancionado = item.get('sancionado', {}).get('nome', 'Sem Nome')
+                cnpj_formatado = item.get('sancionado', {}).get('codigoFormatado', 'Sem CNPJ')
                 
-                # Limpa o que veio da API
-                c1 = re.sub(r'\D', '', str(cnpj_api_1))
-                c2 = re.sub(r'\D', '', str(cnpj_api_2))
+                # Mostra na tela para a gente ver
+                st.code(f"Achei: {nome_sancionado} | CNPJ: {cnpj_formatado}")
+
+                # --- LÓGICA DE FILTRO (AGORA MAIS FLEXÍVEL) ---
+                # Se os 8 primeiros números do CNPJ baterem, a gente pega!
+                cnpj_encontrado_limpo = re.sub(r'\D', '', str(cnpj_formatado))
                 
-                # Se ALGUM deles for igual ao nosso alvo, é bingo!
-                if c1 == cnpj_alvo_limpo or c2 == cnpj_alvo_limpo:
+                if cnpj_encontrado_limpo.startswith(cnpj_raiz):
                     sancoes_confirmadas.append(item)
                     
     except Exception as e:
-        # Silencioso para não poluir a tela, mas registra erro interno se precisar
-        pass
+        st.error(f"Erro de conexão: {e}")
 
     return sancoes_confirmadas
 
