@@ -14,7 +14,7 @@ import io
 st.set_page_config(page_title="Auditoria IA - Gov", page_icon="⚖️", layout="wide")
 load_dotenv()
 
-API_KEY_GOVERNO = os.getenv("API_KEY_GOVERNO")
+API_KEY_GOVERNO = "d03ede6b6072b78e6df678b6800d4ba1"
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
 # --- SESSION STATE ---
