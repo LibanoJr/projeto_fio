@@ -14,7 +14,7 @@ import io
 st.set_page_config(page_title="Auditoria IA - Gov", page_icon="⚖️", layout="wide")
 load_dotenv()
 
-# Configuração de Chaves (Use st.secrets em produção para segurança)
+# Configuração de Chaves
 API_KEY_GOVERNO = os.getenv("API_KEY_GOVERNO") or "d03ede6b6072b78e6df678b6800d4ba1"
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
@@ -69,56 +69,53 @@ def consultar_ficha_suja_blindada(cnpj_alvo):
     if len(cnpj_limpo) != 14:
         return []
 
-    # Formatação Obrigatória para a API
+    # O CNPJ formatado serve apenas para exibição, para a API tentaremos enviar limpo
     cnpj_formatado = f"{cnpj_limpo[:2]}.{cnpj_limpo[2:5]}.{cnpj_limpo[5:8]}/{cnpj_limpo[8:12]}-{cnpj_limpo[12:]}"
     
     headers = {"chave-api-dados": API_KEY_GOVERNO}
     sancoes_confirmadas = []
-
-    # 2. LISTA DE BASES PARA CONSULTAR (CEIS + CNEP)
     bases = ["ceis", "cnep"]
 
     with st.expander(f"🕵️ Log de Rastreamento ({cnpj_formatado})"):
         for base in bases:
-            # URL: Usa cnpjSancionado para tentar pegar exato
             url = f"https://api.portaldatransparencia.gov.br/api-de-dados/{base}"
             st.write(f"📡 Conectando na base **{base.upper()}**...")
             
             try:
-                params = {"cnpjSancionado": cnpj_formatado, "pagina": 1}
+                # CORREÇÃO CRÍTICA: Enviar apenas números para evitar erro de filtro
+                params = {"cnpjSancionado": cnpj_limpo, "pagina": 1}
                 response = requests.get(url, headers=headers, params=params, timeout=10)
                 
                 if response.status_code == 200:
                     dados = response.json()
-                    st.write(f"✅ {base.upper()}: Retornou {len(dados)} registros brutos.")
                     
+                    # FILTRAGEM SILENCIOSA (Só avisa se encontrar o CNPJ certo)
+                    count_match = 0
                     if len(dados) > 0:
-                        # FILTRO INTELIGENTE (ATUALIZADO)
-                        count_match = 0
                         for item in dados:
-                            # Tenta pegar CNPJ de todos os lugares possíveis no JSON
+                            # Pega o CNPJ que veio da API
                             cnpj_voltou = (item.get('pessoa', {}).get('cnpjFormatado') or 
                                            item.get('sancionado', {}).get('codigoFormatado') or "")
                             
                             cnpj_voltou_limpo = re.sub(r'\D', '', str(cnpj_voltou))
                             
-                            # LÓGICA DE CORREÇÃO:
-                            # Verifica se é IGUAL (14 digitos) OU se a RAIZ (8 digitos) é a mesma
+                            # Verifica correspondência (Exata ou Raiz)
                             raiz_input = cnpj_limpo[:8]
                             raiz_voltou = cnpj_voltou_limpo[:8]
 
-                            if cnpj_voltou_limpo == cnpj_limpo or raiz_voltou == raiz_input:
+                            if cnpj_voltou_limpo == cnpj_limpo or (raiz_voltou == raiz_input and len(raiz_voltou) == 8):
                                 item['origem_dado'] = base.upper()
                                 sancoes_confirmadas.append(item)
                                 count_match += 1
                         
-                        if count_match > 0:
-                            st.write(f"🔴 {count_match} registros confirmados pela RAIZ do CNPJ!")
-                        else:
-                            st.warning(f"⚠️ {len(dados)} registros vieram, mas nenhum bateu com a raiz {cnpj_limpo[:8]}.")
+                    if count_match > 0:
+                         st.write(f"🔴 **ALERTA:** {count_match} registros confirmados em {base.upper()}!")
+                    else:
+                         # Se a API retornou lixo (os 15 genéricos), mostramos "Limpo"
+                         st.write(f"✅ {base.upper()}: Nenhum registro vinculado ao alvo.")
 
                 else:
-                    st.write(f"⚠️ {base.upper()}: Falha HTTP {response.status_code}")
+                    st.write(f"⚠️ {base.upper()}: Falha de conexão ({response.status_code})")
             except Exception as e:
                 st.write(f"❌ Erro Técnico em {base.upper()}: {e}")
 
@@ -142,8 +139,7 @@ def gerar_pdf(cnpj, nome, dados):
         orgao = d.get('orgaoSancionador',{}).get('nome','Unknown')[:20]
         data_pub = d.get('dataPublicacaoSancao', '-')
         
-        # Tenta achar motivo
-        motivo = "Não informado"
+        motivo = "Não detalhado"
         if 'fundamentacao' in d and d['fundamentacao']:
              motivo = d['fundamentacao'][0].get('descricao', '')[:30]
         
@@ -169,7 +165,7 @@ if st.sidebar.button("🗑️ Nova Consulta"):
 
 opcao = st.sidebar.radio("Opção:", ["🔍 Analisar Contratos", "🚫 Consultar Empresa (CNPJ)"])
 
-st.title("🏛️ Sistema de Compliance V2.1 (FIX)")
+st.title("🏛️ Sistema de Compliance V2.2 (Final)")
 
 if opcao == "🔍 Analisar Contratos":
     if st.button("Buscar Contratos MEC"):
@@ -192,27 +188,24 @@ elif opcao == "🚫 Consultar Empresa (CNPJ)":
         if len(re.sub(r'\D','',cnpj_in)) != 14:
             st.error("CNPJ deve ter 14 dígitos.")
         else:
-            # 1. TENTA IDENTIFICAR O NOME
             with st.spinner("Buscando cadastro..."):
                 nome_empresa = buscar_dados_receita(cnpj_in)
             
             if not nome_empresa:
-                nome_empresa = "Razão Social Não Disponível (CNPJ Baixado ou Instável)"
-                st.warning("⚠️ Nome não encontrado na base pública. O sistema forçará a busca por sanções pelo número.")
+                nome_empresa = "Razão Social Não Disponível"
+                st.warning("⚠️ Nome não encontrado. O sistema buscará apenas sanções.")
             else:
                 st.success(f"🏢 Empresa Identificada: **{nome_empresa}**")
             
             st.session_state['nome_empresa_atual'] = nome_empresa
 
-            # 2. EXECUTA A BUSCA DE SANÇÕES (SEMPRE)
-            # AQUI ESTÁ A MÁGICA: Ele vai varrer e aceitar raiz
-            resultado_real = consultar_ficha_suja_blindada(cnpj_in)
-            st.session_state['dados_busca'] = resultado_real
-            st.session_state['cnpj_atual'] = cnpj_in
+            with st.spinner("Varrendo Lista Negra do Governo..."):
+                resultado_real = consultar_ficha_suja_blindada(cnpj_in)
+                st.session_state['dados_busca'] = resultado_real
+                st.session_state['cnpj_atual'] = cnpj_in
 
    # EXIBIÇÃO DOS RESULTADOS
     if st.session_state['dados_busca'] is not None:
-        # Check de segurança visual
         input_limpo = re.sub(r'\D','', cnpj_in)
         memoria_limpo = re.sub(r'\D','', st.session_state['cnpj_atual'])
 
@@ -223,24 +216,21 @@ elif opcao == "🚫 Consultar Empresa (CNPJ)":
             if len(sancoes) == 0:
                 st.divider()
                 st.success(f"✅ NADA CONSTA")
-                st.markdown(f"O CNPJ **{formatar_cnpj(st.session_state['cnpj_atual'])}** foi auditado. Nenhuma sanção vinculada à raiz deste CNPJ foi encontrada.")
+                st.markdown(f"O CNPJ **{formatar_cnpj(st.session_state['cnpj_atual'])}** foi auditado. Nenhuma sanção ativa encontrada.")
             else:
                 st.divider()
                 st.error(f"🚨 ALERTA VERMELHO: {len(sancoes)} SANÇÕES ENCONTRADAS!")
                 st.markdown(f"**Empresa:** {nome}")
                 st.markdown(f"**CNPJ Consultado:** {formatar_cnpj(st.session_state['cnpj_atual'])}")
                 
-                # Tenta gerar PDF
                 try:
                     pdf = gerar_pdf(st.session_state['cnpj_atual'], nome, sancoes)
                     st.download_button("📥 Baixar Dossiê (PDF)", data=pdf, file_name="relatorio_auditoria.pdf", mime='application/pdf')
                 except Exception as e:
                     st.error(f"Erro ao gerar PDF: {e}")
 
-                # LISTAGEM LIMPA DOS PROCESSOS
                 for i, s in enumerate(sancoes):
                     orgao = s.get('orgaoSancionador', {}).get('nome', 'Órgão não informado')
-                    # Tenta pegar motivo de vários lugares
                     motivo = "Não detalhado"
                     if 'fundamentacao' in s and s['fundamentacao']:
                          motivo = s['fundamentacao'][0].get('descricao', '')
