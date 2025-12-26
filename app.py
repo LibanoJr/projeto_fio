@@ -63,42 +63,56 @@ def analisar_ia(texto):
         return "Erro IA."
 
 def consultar_ficha_suja_blindada(cnpj_alvo):
-    # --- MODO DIAGNÓSTICO ---
-    st.write(f"🛠️ DEBUG: Iniciando consulta para {cnpj_alvo}...")
-    st.write(f"🔑 Chave sendo usada (primeiros 5 dígitos): {API_KEY_GOVERNO[:5]}*****")
-    
+    # Limpa o CNPJ alvo para comparar apenas números
     cnpj_alvo_limpo = re.sub(r'\D', '', cnpj_alvo)
     
     # URL Oficial
     url = "https://api.portaldatransparencia.gov.br/api-de-dados/ceis"
     headers = {"chave-api-dados": API_KEY_GOVERNO}
-    params = {"cnpjSancionado": cnpj_alvo_limpo, "pagina": 1}
-
-    st.write(f"📡 Tentando conectar em: {url}")
     
+    # Lista para guardar APENAS os resultados verdadeiros
+    sancoes_confirmadas = []
+
+    # --- TENTATIVA 1: Enviando apenas números ---
     try:
+        params = {"cnpjSancionado": cnpj_alvo_limpo, "pagina": 1}
         response = requests.get(url, headers=headers, params=params, timeout=15)
-        
-        # MOSTRA O STATUS NA TELA
-        st.write(f"📡 Status da Resposta: {response.status_code}")
         
         if response.status_code == 200:
             dados = response.json()
-            st.write(f"📦 Dados brutos recebidos: {dados}") # Vai mostrar o JSON cru
-            return dados
-        elif response.status_code == 401:
-            st.error("❌ ERRO 401: Acesso Negado! Sua chave de API está inválida ou não foi lida.")
-            return []
-        elif response.status_code == 403:
-             st.error("❌ ERRO 403: Proibido. O governo pode estar bloqueando o IP do Streamlit.")
-             return []
-        else:
-            st.error(f"❌ Erro desconhecido: {response.status_code}")
-            return []
+            # O FILTRO DE OURO (GUARDIÃO)
+            for item in dados:
+                # Pega o CNPJ que veio da API
+                cnpj_da_api = item.get('pessoa', {}).get('cnpjFormatado', '')
+                # Limpa ele para comparar
+                cnpj_da_api_limpo = re.sub(r'\D', '', cnpj_da_api)
+                
+                # Só aceita se for IDÊNTICO ao pesquisado
+                if cnpj_da_api_limpo == cnpj_alvo_limpo:
+                    sancoes_confirmadas.append(item)
+    except:
+        pass
+
+    # --- TENTATIVA 2: Se não achou nada, tenta enviar formatado (XX.XXX...) ---
+    if not sancoes_confirmadas:
+        try:
+            # Formata o CNPJ alvo
+            cnpj_alvo_formatado = f"{cnpj_alvo_limpo[:2]}.{cnpj_alvo_limpo[2:5]}.{cnpj_alvo_limpo[5:8]}/{cnpj_alvo_limpo[8:12]}-{cnpj_alvo_limpo[12:]}"
+            params = {"cnpjSancionado": cnpj_alvo_formatado, "pagina": 1}
+            response = requests.get(url, headers=headers, params=params, timeout=15)
             
-    except Exception as e:
-        st.error(f"❌ Ocorreu um erro grave na conexão: {e}")
-        return []
+            if response.status_code == 200:
+                dados = response.json()
+                for item in dados:
+                    cnpj_da_api = item.get('pessoa', {}).get('cnpjFormatado', '')
+                    cnpj_da_api_limpo = re.sub(r'\D', '', cnpj_da_api)
+                    
+                    if cnpj_da_api_limpo == cnpj_alvo_limpo:
+                        sancoes_confirmadas.append(item)
+        except:
+            pass
+
+    return sancoes_confirmadas
 
 def gerar_pdf(cnpj, nome, dados):
     buffer = io.BytesIO()
