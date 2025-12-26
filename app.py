@@ -4,7 +4,7 @@ import requests
 # --- CONFIGURAÇÃO ---
 st.set_page_config(page_title="Auditoria Gov - Pente Fino", page_icon="🕵️", layout="centered")
 
-# SUA CHAVE DE API (Válida e testada)
+# SUA CHAVE DE API
 API_KEY = "d03ede6b6072b78e6df678b6800d4ba1"
 
 def formatar_cnpj(cnpj):
@@ -46,13 +46,15 @@ def consultar_base_gov_com_pente_fino(cnpj_alvo, base):
                     continue
 
                 # Limpa o CNPJ encontrado para comparar
-                cnpj_encontrado_limpo = formatar_cnpj(cnpj_encontrado)
+                if cnpj_encontrado:
+                    cnpj_encontrado_limpo = formatar_cnpj(cnpj_encontrado)
 
-                # COMPARAÇÃO EXATA
-                if cnpj_encontrado_limpo == cnpj_limpo:
-                    resultados_exatos.append(item)
+                    # COMPARAÇÃO EXATA
+                    if cnpj_encontrado_limpo == cnpj_limpo:
+                        resultados_exatos.append(item)
             
-            return results_exatos
+            # CORREÇÃO AQUI: Retornando a variável certa
+            return resultados_exatos
             
         else:
             return f"Erro API ({response.status_code})"
@@ -61,8 +63,8 @@ def consultar_base_gov_com_pente_fino(cnpj_alvo, base):
         return f"Erro Conexão: {str(e)}"
 
 # --- INTERFACE ---
-st.title("🕵️ Auditoria Gov (Engine V10)")
-st.caption("Filtro: CNPJ Exato (Elimina falsos positivos genéricos)")
+st.title("🕵️ Auditoria Gov (Engine V10.1)")
+st.caption("Filtro: CNPJ Exato (Correção de variável aplicada)")
 
 cnpj_input = st.text_input("CNPJ Alvo:", placeholder="Ex: 03.050.725/0001-82")
 btn_auditar = st.button("RASTREAR AGORA", type="primary")
