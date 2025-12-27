@@ -13,8 +13,7 @@ st.set_page_config(
 
 PORTAL_KEY = "d03ede6b6072b78e6df678b6800d4ba1"
 
-# --- MAPA DE ÓRGÃOS (Para garantir resultados) ---
-# Códigos oficiais do SIAFI para os ministérios mais movimentados
+# --- MAPA DE ÓRGÃOS ---
 ORGAOS_SIAFI = {
     "Ministério da Saúde (MS)": "36000",
     "Ministério da Educação (MEC)": "26000",
@@ -66,7 +65,6 @@ def consultar_portal(endpoint, params):
     headers = {"chave-api-dados": PORTAL_KEY}
     url = f"https://api.portaldatransparencia.gov.br/api-de-dados/{endpoint}"
     try:
-        # Timeout aumentado para 30s
         resp = requests.get(url, params=params, headers=headers, timeout=30)
         return resp.json() if resp.status_code == 200 else []
     except: return []
@@ -108,7 +106,7 @@ def auditar_empresa(cnpj, nome_empresa):
 with st.sidebar:
     st.title("Auditoria Gov")
     menu = st.radio("Menu", ["Auditoria Unificada", "Monitor de Dados"])
-    st.caption("v18.0 | Filtered Search")
+    st.caption("v19.0 | Money Fix")
 
 if menu == "Auditoria Unificada":
     st.header("Auditoria de Fornecedores")
@@ -154,7 +152,6 @@ elif menu == "Monitor de Dados":
     st.header("Monitoramento Federal")
     st.markdown("Busque contratos e licitações filtrando por órgão para garantir performance.")
     
-    # Linha 1: Seletores
     col_tipo, col_orgao = st.columns([1, 2])
     with col_tipo:
         tipo_busca = st.selectbox("Tipo de Dado:", ["licitacoes", "contratos"], format_func=lambda x: x.capitalize())
@@ -162,10 +159,9 @@ elif menu == "Monitor de Dados":
         orgao_selecionado = st.selectbox("Órgão Público (Filtro):", list(ORGAOS_SIAFI.keys()))
         cod_orgao = ORGAOS_SIAFI[orgao_selecionado]
     
-    # Linha 2: Datas (Padrão 2024 Seguro)
     col_inicio, col_fim = st.columns([1, 1])
     default_inicio = datetime(2024, 10, 1)
-    default_fim = datetime(2024, 10, 31) # Mês fechado para garantir dados
+    default_fim = datetime(2024, 10, 31)
     
     with col_inicio:
         data_inicio = st.date_input("Data Início:", value=default_inicio, format="DD/MM/YYYY")
@@ -179,7 +175,7 @@ elif menu == "Monitor de Dados":
             params = {
                 "dataInicial": data_inicio.strftime("%d/%m/%Y"),
                 "dataFinal": data_fim.strftime("%d/%m/%Y"),
-                "codigoOrgao": cod_orgao, # O PULO DO GATO AQUI
+                "codigoOrgao": cod_orgao,
                 "pagina": 1
             }
             
@@ -191,7 +187,13 @@ elif menu == "Monitor de Dados":
                 
                 for d in dados:
                     if tipo_busca == "contratos":
+                        # --- CORREÇÃO DE VALORES V19 ---
                         val = d.get('valorInicial', 0)
+                        if val == 0:
+                            val = d.get('valorVigente', 0) # Tenta valor vigente
+                        if val == 0:
+                            val = d.get('valorGlobal', 0) # Última tentativa
+                            
                         forn = d.get('fornecedor', {}).get('nome', 'Sigiloso/Outros')
                         lista_tabela.append({
                             "Data": d.get('dataAssinatura'),
@@ -204,8 +206,13 @@ elif menu == "Monitor de Dados":
                             "Objeto": d.get('objeto', 'Sem descrição')[:100] + "...",
                             "Situação": d.get('situacaoAviso', 'N/A')
                         })
-                        
-                st.dataframe(pd.DataFrame(lista_tabela), use_container_width=True, hide_index=True)
+                
+                # Transforma em DF e Ordena por Data (Mais recente primeiro)
+                df = pd.DataFrame(lista_tabela)
+                if not df.empty and "Data" in df.columns:
+                    df = df.sort_values(by="Data", ascending=False)
+                
+                st.dataframe(df, use_container_width=True, hide_index=True)
             else:
                 st.warning(f"Nenhum registro encontrado para {orgao_selecionado} neste período.")
                 with st.expander("Ver Detalhes do Erro"):
