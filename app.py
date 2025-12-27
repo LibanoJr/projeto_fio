@@ -13,7 +13,7 @@ st.set_page_config(
 
 PORTAL_KEY = "d03ede6b6072b78e6df678b6800d4ba1"
 
-# --- ESTILO (V14 Mantido) ---
+# --- ESTILO ---
 st.markdown("""
 <style>
     .stApp { background-color: #0e1117; color: #fafafa; }
@@ -56,7 +56,6 @@ def consultar_portal(endpoint, params):
     headers = {"chave-api-dados": PORTAL_KEY}
     url = f"https://api.portaldatransparencia.gov.br/api-de-dados/{endpoint}"
     try:
-        # Aumentei o timeout para 25s pois Contratos é pesado
         resp = requests.get(url, params=params, headers=headers, timeout=25)
         return resp.json() if resp.status_code == 200 else []
     except: return []
@@ -98,7 +97,7 @@ def auditar_empresa(cnpj, nome_empresa):
 with st.sidebar:
     st.title("Auditoria Gov")
     menu = st.radio("Menu", ["Auditoria Unificada", "Monitor de Dados"])
-    st.caption("v15.0 | Date Picker Fix")
+    st.caption("v16.0 | Split Dates Fix")
 
 if menu == "Auditoria Unificada":
     st.header("Auditoria de Fornecedores")
@@ -142,31 +141,35 @@ if menu == "Auditoria Unificada":
 
 elif menu == "Monitor de Dados":
     st.header("Monitoramento Federal")
+    st.markdown("Busque contratos e licitações por período.")
     
-    # Filtros Manuais (Resolve o problema da data errada)
-    col_tipo, col_date = st.columns([1, 2])
+    # --- MUDANÇA AQUI: LAYOUT COM 3 COLUNAS ---
+    col_tipo, col_inicio, col_fim = st.columns([1, 1, 1])
+    
     with col_tipo:
-        tipo_busca = st.selectbox("Tipo de Dado:", ["contratos", "licitacoes"], format_func=lambda x: x.capitalize())
-    with col_date:
-        # Padrão: Últimos 30 dias (Garante volume de dados)
-        hoje = datetime.now()
-        data_range = st.date_input(
-            "Período de Análise:",
-            value=(hoje - timedelta(days=30), hoje),
-            format="DD/MM/YYYY"
-        )
+        tipo_busca = st.selectbox("Tipo de Dado:", ["licitacoes", "contratos"], format_func=lambda x: x.capitalize())
     
-    if st.button("Buscar Dados"):
-        if len(data_range) != 2:
-            st.warning("Selecione uma data inicial e final.")
+    # Datas padrão: Últimos 15 dias até ONTEM (para evitar falta de dados do dia corrente)
+    hoje = datetime.now()
+    ontem = hoje - timedelta(days=1)
+    quinze_dias_atras = hoje - timedelta(days=15)
+    
+    with col_inicio:
+        data_inicio = st.date_input("Data Início:", value=quinze_dias_atras, format="DD/MM/YYYY")
+    
+    with col_fim:
+        data_fim = st.date_input("Data Fim:", value=ontem, format="DD/MM/YYYY")
+    
+    if st.button("Buscar Dados", type="primary"):
+        if data_inicio > data_fim:
+            st.warning("⚠️ A data de início não pode ser maior que a data fim.")
         else:
-            start, end = data_range
-            st.caption(f"Buscando {tipo_busca} de {start.strftime('%d/%m/%Y')} até {end.strftime('%d/%m/%Y')}...")
+            st.caption(f"Buscando **{tipo_busca}** de {data_inicio.strftime('%d/%m/%Y')} até {data_fim.strftime('%d/%m/%Y')}...")
             
             with st.spinner("Conectando ao Portal da Transparência..."):
                 params = {
-                    "dataInicial": start.strftime("%d/%m/%Y"),
-                    "dataFinal": end.strftime("%d/%m/%Y"),
+                    "dataInicial": data_inicio.strftime("%d/%m/%Y"),
+                    "dataFinal": data_fim.strftime("%d/%m/%Y"),
                     "pagina": 1
                 }
                 
@@ -176,7 +179,6 @@ elif menu == "Monitor de Dados":
                     st.success(f"{len(dados)} registros encontrados.")
                     lista_tabela = []
                     
-                    # Formatação Dinâmica (Contrato vs Licitação)
                     for d in dados:
                         if tipo_busca == "contratos":
                             lista_tabela.append({
@@ -189,15 +191,15 @@ elif menu == "Monitor de Dados":
                             lista_tabela.append({
                                 "Data": d.get('dataAbertura'),
                                 "Órgão": d.get('unidadeGestora', {}).get('nome'),
-                                "Objeto": d.get('objeto', '')[:80] + "...",
+                                "Objeto": d.get('objeto', '')[:100] + "...",
                                 "Situação": d.get('situacaoAviso', 'N/A')
                             })
                             
                     st.dataframe(pd.DataFrame(lista_tabela), use_container_width=True, hide_index=True)
                 else:
                     st.warning("Nenhum registro encontrado para este período.")
-                    # Debug: Mostra a URL se der vazio pra gente saber o porquê
-                    with st.expander("🛠️ Debug Técnico (Por que veio vazio?)"):
-                        st.write(f"**Endpoint:** {tipo_busca}")
-                        st.write(f"**Params Enviados:** {params}")
-                        st.write("Dica: Se a data estiver no futuro ou o período for muito curto (ex: feriado), a API retorna vazio.")
+                    st.caption("Dica: Tente buscar 'Licitações' ou aumente o intervalo de datas.")
+                    
+                    with st.expander("🛠️ Debug Técnico"):
+                        st.write(f"Endpoint: {tipo_busca}")
+                        st.json(params)
