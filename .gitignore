@@ -1,8 +1,21 @@
+# --- Ambiente e Segurança ---
 venv/
 __pycache__/
-_ARQUIVOS_ANTIGOS/
-*.log
-*.png
-*.html
-*.md
 .env
+
+# --- Pastas de Backup e Dados Locais ---
+_ARQUIVOS_ANTIGOS/
+_VERSOES_ANTIGAS/
+data/
+
+# --- Arquivos Temporários e Logs ---
+*.log
+*.html
+*.png
+*.db
+*.sqlite3
+
+# --- Documentação ---
+# Ignora markdowns genéricos, mas FORÇA a inclusão do README
+*.md
+!README.md
