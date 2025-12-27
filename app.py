@@ -13,6 +13,16 @@ st.set_page_config(
 
 PORTAL_KEY = "d03ede6b6072b78e6df678b6800d4ba1"
 
+# --- MAPA DE ÓRGÃOS (Para garantir resultados) ---
+# Códigos oficiais do SIAFI para os ministérios mais movimentados
+ORGAOS_SIAFI = {
+    "Ministério da Saúde (MS)": "36000",
+    "Ministério da Educação (MEC)": "26000",
+    "Ministério da Defesa (MD)": "52000",
+    "Ministério da Justiça (MJ)": "30000",
+    "Presidência da República": "20000"
+}
+
 # --- ESTILO ---
 st.markdown("""
 <style>
@@ -56,11 +66,10 @@ def consultar_portal(endpoint, params):
     headers = {"chave-api-dados": PORTAL_KEY}
     url = f"https://api.portaldatransparencia.gov.br/api-de-dados/{endpoint}"
     try:
-        # Timeout de 30s para garantir conexão
+        # Timeout aumentado para 30s
         resp = requests.get(url, params=params, headers=headers, timeout=30)
         return resp.json() if resp.status_code == 200 else []
-    except Exception as e:
-        return []
+    except: return []
 
 def auditar_empresa(cnpj, nome_empresa):
     resultados = []
@@ -99,7 +108,7 @@ def auditar_empresa(cnpj, nome_empresa):
 with st.sidebar:
     st.title("Auditoria Gov")
     menu = st.radio("Menu", ["Auditoria Unificada", "Monitor de Dados"])
-    st.caption("v17.0 | Safe Date Fix")
+    st.caption("v18.0 | Filtered Search")
 
 if menu == "Auditoria Unificada":
     st.header("Auditoria de Fornecedores")
@@ -143,71 +152,62 @@ if menu == "Auditoria Unificada":
 
 elif menu == "Monitor de Dados":
     st.header("Monitoramento Federal")
-    st.markdown("Busque contratos e licitações recentes.")
+    st.markdown("Busque contratos e licitações filtrando por órgão para garantir performance.")
     
-    col_tipo, col_inicio, col_fim = st.columns([1, 1, 1])
-    
+    # Linha 1: Seletores
+    col_tipo, col_orgao = st.columns([1, 2])
     with col_tipo:
-        # Inverti para Licitações primeiro (mais garantido ter dados)
         tipo_busca = st.selectbox("Tipo de Dado:", ["licitacoes", "contratos"], format_func=lambda x: x.capitalize())
+    with col_orgao:
+        orgao_selecionado = st.selectbox("Órgão Público (Filtro):", list(ORGAOS_SIAFI.keys()))
+        cod_orgao = ORGAOS_SIAFI[orgao_selecionado]
     
-    # --- FIX 2024: FORÇANDO DATAS QUE EXISTEM ---
-    # Usamos datas fixas de 2024 para garantir que a demo funcione independente da data do PC
-    default_inicio = datetime(2024, 11, 1)
-    default_fim = datetime(2024, 11, 15)
+    # Linha 2: Datas (Padrão 2024 Seguro)
+    col_inicio, col_fim = st.columns([1, 1])
+    default_inicio = datetime(2024, 10, 1)
+    default_fim = datetime(2024, 10, 31) # Mês fechado para garantir dados
     
     with col_inicio:
         data_inicio = st.date_input("Data Início:", value=default_inicio, format="DD/MM/YYYY")
-    
     with col_fim:
         data_fim = st.date_input("Data Fim:", value=default_fim, format="DD/MM/YYYY")
     
     if st.button("Buscar Dados", type="primary"):
-        if data_inicio > data_fim:
-            st.warning("⚠️ A data de início não pode ser maior que a data fim.")
-        else:
-            st.caption(f"Buscando **{tipo_busca}** de {data_inicio.strftime('%d/%m/%Y')} até {data_fim.strftime('%d/%m/%Y')}...")
+        st.caption(f"Buscando **{tipo_busca}** do **{orgao_selecionado}**...")
+        
+        with st.spinner("Consultando Portal da Transparência..."):
+            params = {
+                "dataInicial": data_inicio.strftime("%d/%m/%Y"),
+                "dataFinal": data_fim.strftime("%d/%m/%Y"),
+                "codigoOrgao": cod_orgao, # O PULO DO GATO AQUI
+                "pagina": 1
+            }
             
-            with st.spinner(f"Baixando dados do Portal da Transparência ({data_inicio.year})..."):
-                params = {
-                    "dataInicial": data_inicio.strftime("%d/%m/%Y"),
-                    "dataFinal": data_fim.strftime("%d/%m/%Y"),
-                    "pagina": 1
-                }
+            dados = consultar_portal(tipo_busca, params)
+            
+            if dados:
+                st.success(f"✅ {len(dados)} registros encontrados.")
+                lista_tabela = []
                 
-                dados = consultar_portal(tipo_busca, params)
-                
-                if dados:
-                    st.success(f"✅ {len(dados)} registros encontrados.")
-                    lista_tabela = []
-                    
-                    for d in dados:
-                        if tipo_busca == "contratos":
-                            val = d.get('valorInicial', 0)
-                            lista_tabela.append({
-                                "Data": d.get('dataAssinatura'),
-                                "Órgão": d.get('unidadeGestora', {}).get('nome'),
-                                "Fornecedor": d.get('fornecedor', {}).get('nome', 'N/A')[:30],
-                                "Valor": f"R$ {val:,.2f}"
-                            })
-                        else: # Licitações
-                            lista_tabela.append({
-                                "Data": d.get('dataAbertura'),
-                                "Órgão": d.get('unidadeGestora', {}).get('nome'),
-                                "Objeto": d.get('objeto', '')[:80] + "...",
-                                "Situação": d.get('situacaoAviso', 'N/A')
-                            })
-                            
-                    st.dataframe(pd.DataFrame(lista_tabela), use_container_width=True, hide_index=True)
-                else:
-                    st.warning("⚠️ Nenhum registro encontrado.")
-                    st.markdown("""
-                    **Possíveis causas:**
-                    1. Data selecionada está no futuro.
-                    2. O órgão não publicou dados neste período exato.
-                    3. A API do governo está instável momentaneamente.
-                    """)
-                    
-                    with st.expander("🛠️ Debug Técnico"):
-                        st.write(f"Endpoint: {tipo_busca}")
-                        st.json(params)
+                for d in dados:
+                    if tipo_busca == "contratos":
+                        val = d.get('valorInicial', 0)
+                        forn = d.get('fornecedor', {}).get('nome', 'Sigiloso/Outros')
+                        lista_tabela.append({
+                            "Data": d.get('dataAssinatura'),
+                            "Fornecedor": forn[:40],
+                            "Valor": f"R$ {val:,.2f}"
+                        })
+                    else: # Licitações
+                        lista_tabela.append({
+                            "Data": d.get('dataAbertura'),
+                            "Objeto": d.get('objeto', 'Sem descrição')[:100] + "...",
+                            "Situação": d.get('situacaoAviso', 'N/A')
+                        })
+                        
+                st.dataframe(pd.DataFrame(lista_tabela), use_container_width=True, hide_index=True)
+            else:
+                st.warning(f"Nenhum registro encontrado para {orgao_selecionado} neste período.")
+                with st.expander("Ver Detalhes do Erro"):
+                    st.write(f"Endpoint: {tipo_busca}")
+                    st.json(params)
