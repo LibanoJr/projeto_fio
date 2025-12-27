@@ -3,165 +3,105 @@ import requests
 import pandas as pd
 from datetime import datetime, timedelta
 
-# --- CONFIGURAÇÃO INICIAL (LAYOUT WIDE & SIDEBAR FECHADA) ---
+# --- CONFIGURAÇÃO ---
 st.set_page_config(
     page_title="Auditoria Gov",
     page_icon="⚖️",
     layout="wide",
-    initial_sidebar_state="collapsed" # Começa fechado para não poluir
+    initial_sidebar_state="collapsed"
 )
 
-# Chave da API
 PORTAL_KEY = "d03ede6b6072b78e6df678b6800d4ba1"
 
-# --- ESTÉTICA PROFISSIONAL (DARK MODE CORRIGIDO) ---
+# --- ESTILO (V14 Mantido) ---
 st.markdown("""
 <style>
-    /* Forçar Tema Escuro e Fundo Limpo */
-    .stApp {
-        background-color: #0e1117;
-        color: #fafafa;
-    }
+    .stApp { background-color: #0e1117; color: #fafafa; }
+    .stTextInput > div > div > input { background-color: #262730; color: #fff; border: 1px solid #41444e; }
     
-    /* Inputs Estilizados (Dark) */
-    .stTextInput > div > div > input {
-        background-color: #262730;
-        color: #ffffff;
-        border: 1px solid #41444e;
+    /* Card de Sanção */
+    .sancao-card {
+        background-color: #1f2937;
+        padding: 15px;
+        border-radius: 8px;
+        border-left: 5px solid #ef4444;
+        margin-bottom: 10px;
     }
+    .tag-ceis { background-color: #7f1d1d; color: #fca5a5; padding: 2px 8px; border-radius: 4px; font-size: 0.8em; font-weight: bold; }
+    .tag-cnep { background-color: #451a03; color: #fdba74; padding: 2px 8px; border-radius: 4px; font-size: 0.8em; font-weight: bold; }
     
-    /* Cards de Métricas e Resultados */
-    div[data-testid="stMetric"], div.stAlert {
-        background-color: #1f2937; /* Cinza azulado escuro */
-        border: 1px solid #374151;
-        border-radius: 6px;
-        color: white;
-    }
+    h1, h2, h3, p { font-family: 'Segoe UI', sans-serif; }
     
-    /* Ajuste de Texto para Leitura */
-    h1, h2, h3, p, li {
-        color: #e5e7eb !important;
-        font-family: 'Segoe UI', sans-serif;
-    }
-    
-    /* Botão Principal (Sobriedade) */
     .stButton>button {
-        background-color: #2563eb; /* Azul Institucional */
-        color: white;
-        border: none;
-        border-radius: 6px;
-        height: 3em;
-        font-weight: 500;
-        transition: 0.3s;
+        background-color: #2563eb; color: white; border: none; border-radius: 6px; height: 3em; font-weight: 500;
     }
-    .stButton>button:hover {
-        background-color: #1d4ed8;
-    }
-
-    /* Remover padding excessivo do topo */
-    .block-container {
-        padding-top: 2rem;
-    }
+    .stButton>button:hover { background-color: #1d4ed8; }
 </style>
 """, unsafe_allow_html=True)
 
 # --- FUNÇÕES ---
-
 def formatar_cnpj(cnpj):
     return "".join([n for n in cnpj if n.isdigit()])
 
-def get_dates_for_week(offset):
-    today = datetime.now()
-    if offset == 0:
-        end_date = today
-        start_date = today - timedelta(days=7)
-    elif offset < 0:
-        end_date = today - timedelta(weeks=abs(offset))
-        start_date = end_date - timedelta(days=7)
-    else:
-        start_date = today + timedelta(weeks=offset-1)
-        end_date = start_date + timedelta(days=7)
-    return start_date, end_date
-
 @st.cache_data(ttl=3600)
 def consultar_dados_cadastrais(cnpj):
-    """Busca nome na BrasilAPI"""
-    cnpj_limpo = formatar_cnpj(cnpj)
     try:
-        url = f"https://brasilapi.com.br/api/cnpj/v1/{cnpj_limpo}"
-        response = requests.get(url, timeout=5)
-        if response.status_code == 200:
-            return response.json()
-    except:
-        pass
+        url = f"https://brasilapi.com.br/api/cnpj/v1/{formatar_cnpj(cnpj)}"
+        resp = requests.get(url, timeout=5)
+        if resp.status_code == 200: return resp.json()
+    except: pass
     return None
 
-def consultar_portal_transparencia(endpoint, params):
+def consultar_portal(endpoint, params):
     headers = {"chave-api-dados": PORTAL_KEY}
     url = f"https://api.portaldatransparencia.gov.br/api-de-dados/{endpoint}"
     try:
-        response = requests.get(url, params=params, headers=headers, timeout=10)
-        if response.status_code == 200:
-            return response.json()
-    except:
-        return []
-    return []
+        # Aumentei o timeout para 25s pois Contratos é pesado
+        resp = requests.get(url, params=params, headers=headers, timeout=25)
+        return resp.json() if resp.status_code == 200 else []
+    except: return []
 
 def auditar_empresa(cnpj, nome_empresa):
-    resultados = {"CEIS": [], "CNEP": [], "status": "Limpo", "origem": "N/A"}
+    resultados = []
     cnpj_limpo = formatar_cnpj(cnpj)
     bases = ["ceis", "cnep"]
+    encontrou_algo = False
     
     for base in bases:
-        # 1. Busca por CNPJ
-        resp_cnpj = consultar_portal_transparencia(base, {"cnpjSancionado": cnpj_limpo, "pagina": 1})
-        
-        items_validos = []
-        if resp_cnpj:
-            for item in resp_cnpj:
-                try:
-                    c_sanc = item.get('sancionado', {}).get('codigoFormatado', '')
-                    c_pessoa = item.get('pessoa', {}).get('cnpjFormatado', '')
-                    if formatar_cnpj(c_sanc) == cnpj_limpo or formatar_cnpj(c_pessoa) == cnpj_limpo:
-                        items_validos.append(item)
-                except: pass
-        
-        if items_validos:
-            resultados[base.upper()] = items_validos
-            resultados["status"] = "Sujo"
-            resultados["origem"] = "CNPJ"
-        
-        # 2. Busca por Nome (Fallback)
-        elif not items_validos and nome_empresa:
-            termo_busca = nome_empresa.split(" LTDA")[0].split(" S.A")[0][:60]
-            resp_nome = consultar_portal_transparencia(base, {"nomeSancionado": termo_busca, "pagina": 1})
+        items = consultar_portal(base, {"cnpjSancionado": cnpj_limpo, "pagina": 1})
+        validos = []
+        for item in items:
+            try:
+                c1 = formatar_cnpj(item.get('sancionado', {}).get('codigoFormatado', ''))
+                c2 = formatar_cnpj(item.get('pessoa', {}).get('cnpjFormatado', ''))
+                if c1 == cnpj_limpo or c2 == cnpj_limpo:
+                    item['_origem'] = base.upper()
+                    validos.append(item)
+            except: pass
             
-            items_nome_validos = []
-            if resp_nome:
-                for item in resp_nome:
-                    c_sanc = formatar_cnpj(item.get('sancionado', {}).get('codigoFormatado', ''))
-                    if c_sanc == cnpj_limpo:
-                        items_nome_validos.append(item)
+        if not validos and nome_empresa and not encontrou_algo:
+            termo = nome_empresa.split(" LTDA")[0].split(" S.A")[0][:60]
+            items_nome = consultar_portal(base, {"nomeSancionado": termo, "pagina": 1})
+            for item in items_nome:
+                c1 = formatar_cnpj(item.get('sancionado', {}).get('codigoFormatado', ''))
+                if c1 == cnpj_limpo:
+                    item['_origem'] = base.upper()
+                    validos.append(item)
+        
+        if validos:
+            resultados.extend(validos)
+            encontrou_algo = True
             
-            if items_nome_validos:
-                resultados[base.upper()] = items_nome_validos
-                resultados["status"] = "Sujo"
-                resultados["origem"] = f"Nome ({termo_busca})"
-                
     return resultados
 
 # --- INTERFACE ---
-
-# Sidebar Minimalista
 with st.sidebar:
     st.title("Auditoria Gov")
-    menu = st.radio("Ferramentas", ["Auditoria Rápida", "Monitor de Contratos"])
-    st.markdown("---")
-    st.caption("v13.0 Stable | Dark Mode")
+    menu = st.radio("Menu", ["Auditoria Unificada", "Monitor de Dados"])
+    st.caption("v15.0 | Date Picker Fix")
 
-if menu == "Auditoria Rápida":
+if menu == "Auditoria Unificada":
     st.header("Auditoria de Fornecedores")
-    st.markdown("Verificação de regularidade em bases federais (CEIS/CNEP).")
     
     col_inp, col_btn = st.columns([4, 1])
     with col_inp:
@@ -171,84 +111,93 @@ if menu == "Auditoria Rápida":
         
     if btn_check and cnpj_input:
         st.markdown("---")
-        with st.spinner("Processando cruzamento de dados..."):
+        with st.spinner("Analisando todas as bases federais..."):
+            cad = consultar_dados_cadastrais(cnpj_input)
+            razao = cad.get('razao_social', '') if cad else ""
+            if razao: st.info(f"🏢 **{razao}**")
             
-            # 1. Dados Cadastrais
-            dados_cadastrais = consultar_dados_cadastrais(cnpj_input)
-            razao_social = dados_cadastrais.get('razao_social', '') if dados_cadastrais else ""
+            lista_sancoes = auditar_empresa(cnpj_input, razao)
             
-            if razao_social:
-                st.info(f"🏢 **{razao_social}** ({dados_cadastrais.get('nome_fantasia', 'Sem fantasia')})")
+            if lista_sancoes:
+                st.error(f"❌ **EMPRESA RESTRITA:** {len(lista_sancoes)} sanções encontradas.")
+                for item in lista_sancoes:
+                    origem = item.get('_origem', 'GOV')
+                    orgao = item.get('orgaoSancionador', {}).get('nome', 'Órgão não informado')
+                    motivo = item.get('tipoSancao', {}).get('descricaoResumida', 'Motivo não detalhado')
+                    data_fim = item.get('dataFimSancao', 'Indeterminado')
+                    tag_class = "tag-cnep" if origem == "CNEP" else "tag-ceis"
+                    
+                    st.markdown(f"""
+                    <div class="sancao-card">
+                        <span class="{tag_class}">{origem}</span>
+                        <span style="margin-left: 10px; font-weight: bold; color: #e5e7eb;">{orgao}</span>
+                        <div style="margin-top: 8px; color: #9ca3af; font-size: 0.9em;">
+                            Motivo: {motivo} <br>
+                            <strong>Vigência até: {data_fim}</strong>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
             else:
-                st.warning("CNPJ não localizado na base cadastral. Buscando apenas por numeração.")
-            
-            # 2. Auditoria
-            resultado = auditar_empresa(cnpj_input, razao_social)
-            
-            col1, col2 = st.columns(2)
-            
-            # Bloco CEIS
-            with col1:
-                st.subheader("CEIS")
-                if resultado["CEIS"]:
-                    st.error(f"⚠️ {len(resultado['CEIS'])} RESTRIÇÕES")
-                    for item in resultado["CEIS"]:
-                        with st.expander("Detalhes da Sanção"):
-                            st.write(f"**Orgão:** {item.get('orgaoSancionador', {}).get('nome', '')}")
-                            st.write(f"**Motivo:** {item.get('tipoSancao', {}).get('descricaoResumida', 'N/A')}")
-                else:
-                    st.success("✅ Regular (Nada Consta)")
+                st.success("✅ **APTO PARA CONTRATAÇÃO:** Nenhuma restrição encontrada.")
 
-            # Bloco CNEP
-            with col2:
-                st.subheader("CNEP")
-                if resultado["CNEP"]:
-                    st.error(f"⚠️ {len(resultado['CNEP'])} RESTRIÇÕES")
-                    st.json(resultado["CNEP"])
-                else:
-                    st.success("✅ Regular (Nada Consta)")
-            
-            # Resultado Final Limpo
-            st.markdown("---")
-            if resultado["status"] == "Sujo":
-                st.error("❌ RESULTADO: **EMPRESA COM RESTRIÇÕES VIGENTES**")
-            else:
-                # Sem balões, apenas mensagem profissional
-                st.success("✅ RESULTADO: **APTO PARA CONTRATAÇÃO**")
-
-elif menu == "Monitor de Contratos":
-    st.header("Monitor de Contratos")
+elif menu == "Monitor de Dados":
+    st.header("Monitoramento Federal")
     
-    col_sem, col_space = st.columns([2, 3])
-    with col_sem:
-        opcao_semana = st.selectbox(
+    # Filtros Manuais (Resolve o problema da data errada)
+    col_tipo, col_date = st.columns([1, 2])
+    with col_tipo:
+        tipo_busca = st.selectbox("Tipo de Dado:", ["contratos", "licitacoes"], format_func=lambda x: x.capitalize())
+    with col_date:
+        # Padrão: Últimos 30 dias (Garante volume de dados)
+        hoje = datetime.now()
+        data_range = st.date_input(
             "Período de Análise:",
-            options=[-2, -1, 0, 1, 2],
-            format_func=lambda x: "Semana Atual" if x == 0 else f"Semana {x:+d}",
-            index=2
+            value=(hoje - timedelta(days=30), hoje),
+            format="DD/MM/YYYY"
         )
     
-    start, end = get_dates_for_week(opcao_semana)
-    st.caption(f"De {start.strftime('%d/%m/%Y')} até {end.strftime('%d/%m/%Y')}")
-    
-    if st.button("Carregar Contratos"):
-        with st.spinner("Buscando no Portal da Transparência..."):
-            params = {
-                "dataInicial": start.strftime("%d/%m/%Y"),
-                "dataFinal": end.strftime("%d/%m/%Y"),
-                "pagina": 1
-            }
-            dados = consultar_portal_transparencia("contratos", params)
+    if st.button("Buscar Dados"):
+        if len(data_range) != 2:
+            st.warning("Selecione uma data inicial e final.")
+        else:
+            start, end = data_range
+            st.caption(f"Buscando {tipo_busca} de {start.strftime('%d/%m/%Y')} até {end.strftime('%d/%m/%Y')}...")
             
-            if dados:
-                lista_tabela = []
-                for d in dados:
-                    lista_tabela.append({
-                        "Data": d.get('dataAssinatura', ''),
-                        "Órgão": d.get('unidadeGestora', {}).get('nome', 'N/A'),
-                        "Fornecedor": d.get('fornecedor', {}).get('nome', 'N/A'),
-                        "Valor": f"R$ {d.get('valorInicial', 0):,.2f}",
-                    })
-                st.dataframe(pd.DataFrame(lista_tabela), use_container_width=True, hide_index=True)
-            else:
-                st.info("Nenhum contrato encontrado para este período.")
+            with st.spinner("Conectando ao Portal da Transparência..."):
+                params = {
+                    "dataInicial": start.strftime("%d/%m/%Y"),
+                    "dataFinal": end.strftime("%d/%m/%Y"),
+                    "pagina": 1
+                }
+                
+                dados = consultar_portal(tipo_busca, params)
+                
+                if dados:
+                    st.success(f"{len(dados)} registros encontrados.")
+                    lista_tabela = []
+                    
+                    # Formatação Dinâmica (Contrato vs Licitação)
+                    for d in dados:
+                        if tipo_busca == "contratos":
+                            lista_tabela.append({
+                                "Data": d.get('dataAssinatura'),
+                                "Órgão": d.get('unidadeGestora', {}).get('nome'),
+                                "Fornecedor": d.get('fornecedor', {}).get('nome', 'N/A'),
+                                "Valor": f"R$ {d.get('valorInicial', 0):,.2f}"
+                            })
+                        else: # Licitações
+                            lista_tabela.append({
+                                "Data": d.get('dataAbertura'),
+                                "Órgão": d.get('unidadeGestora', {}).get('nome'),
+                                "Objeto": d.get('objeto', '')[:80] + "...",
+                                "Situação": d.get('situacaoAviso', 'N/A')
+                            })
+                            
+                    st.dataframe(pd.DataFrame(lista_tabela), use_container_width=True, hide_index=True)
+                else:
+                    st.warning("Nenhum registro encontrado para este período.")
+                    # Debug: Mostra a URL se der vazio pra gente saber o porquê
+                    with st.expander("🛠️ Debug Técnico (Por que veio vazio?)"):
+                        st.write(f"**Endpoint:** {tipo_busca}")
+                        st.write(f"**Params Enviados:** {params}")
+                        st.write("Dica: Se a data estiver no futuro ou o período for muito curto (ex: feriado), a API retorna vazio.")
