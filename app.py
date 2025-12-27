@@ -39,6 +39,12 @@ st.markdown("""
     .tag-ceis { background-color: #7f1d1d; color: #fca5a5; padding: 2px 8px; border-radius: 4px; font-size: 0.8em; font-weight: bold; }
     .tag-cnep { background-color: #451a03; color: #fdba74; padding: 2px 8px; border-radius: 4px; font-size: 0.8em; font-weight: bold; }
     
+    /* Métricas */
+    div[data-testid="stMetricValue"] {
+        font-size: 1.8rem;
+        color: #4ade80; /* Verde Dinheiro */
+    }
+    
     h1, h2, h3, p { font-family: 'Segoe UI', sans-serif; }
     
     .stButton>button {
@@ -106,7 +112,7 @@ def auditar_empresa(cnpj, nome_empresa):
 with st.sidebar:
     st.title("Auditoria Gov")
     menu = st.radio("Menu", ["Auditoria Unificada", "Monitor de Dados"])
-    st.caption("v19.0 | Money Fix")
+    st.info("v20.0 | Dashboard Ativo 📊")
 
 if menu == "Auditoria Unificada":
     st.header("Auditoria de Fornecedores")
@@ -149,29 +155,32 @@ if menu == "Auditoria Unificada":
                 st.success("✅ **APTO PARA CONTRATAÇÃO:** Nenhuma restrição encontrada.")
 
 elif menu == "Monitor de Dados":
-    st.header("Monitoramento Federal")
-    st.markdown("Busque contratos e licitações filtrando por órgão para garantir performance.")
+    st.header("Monitoramento Federal 📊")
+    st.markdown("Analise gastos e contratos em tempo real.")
     
-    col_tipo, col_orgao = st.columns([1, 2])
-    with col_tipo:
-        tipo_busca = st.selectbox("Tipo de Dado:", ["licitacoes", "contratos"], format_func=lambda x: x.capitalize())
-    with col_orgao:
-        orgao_selecionado = st.selectbox("Órgão Público (Filtro):", list(ORGAOS_SIAFI.keys()))
-        cod_orgao = ORGAOS_SIAFI[orgao_selecionado]
-    
-    col_inicio, col_fim = st.columns([1, 1])
-    default_inicio = datetime(2024, 10, 1)
-    default_fim = datetime(2024, 10, 31)
-    
-    with col_inicio:
-        data_inicio = st.date_input("Data Início:", value=default_inicio, format="DD/MM/YYYY")
-    with col_fim:
-        data_fim = st.date_input("Data Fim:", value=default_fim, format="DD/MM/YYYY")
-    
-    if st.button("Buscar Dados", type="primary"):
-        st.caption(f"Buscando **{tipo_busca}** do **{orgao_selecionado}**...")
+    # Filtros em container para ficar organizado
+    with st.container():
+        col_tipo, col_orgao = st.columns([1, 2])
+        with col_tipo:
+            tipo_busca = st.selectbox("Tipo de Dado:", ["licitacoes", "contratos"], format_func=lambda x: x.capitalize())
+        with col_orgao:
+            orgao_selecionado = st.selectbox("Órgão Público:", list(ORGAOS_SIAFI.keys()))
+            cod_orgao = ORGAOS_SIAFI[orgao_selecionado]
         
-        with st.spinner("Consultando Portal da Transparência..."):
+        col_inicio, col_fim = st.columns([1, 1])
+        default_inicio = datetime(2024, 10, 1)
+        default_fim = datetime(2024, 10, 31)
+        
+        with col_inicio:
+            data_inicio = st.date_input("De:", value=default_inicio, format="DD/MM/YYYY")
+        with col_fim:
+            data_fim = st.date_input("Até:", value=default_fim, format="DD/MM/YYYY")
+        
+        btn_buscar = st.button("Analisar Dados", type="primary", use_container_width=True)
+    
+    if btn_buscar:
+        st.markdown("---")
+        with st.spinner(f"Minerando dados do {orgao_selecionado}..."):
             params = {
                 "dataInicial": data_inicio.strftime("%d/%m/%Y"),
                 "dataFinal": data_fim.strftime("%d/%m/%Y"),
@@ -182,39 +191,62 @@ elif menu == "Monitor de Dados":
             dados = consultar_portal(tipo_busca, params)
             
             if dados:
-                st.success(f"✅ {len(dados)} registros encontrados.")
                 lista_tabela = []
+                total_gasto = 0.0
                 
+                # Processamento dos Dados
                 for d in dados:
                     if tipo_busca == "contratos":
-                        # --- CORREÇÃO DE VALORES V19 ---
                         val = d.get('valorInicial', 0)
-                        if val == 0:
-                            val = d.get('valorVigente', 0) # Tenta valor vigente
-                        if val == 0:
-                            val = d.get('valorGlobal', 0) # Última tentativa
-                            
-                        forn = d.get('fornecedor', {}).get('nome', 'Sigiloso/Outros')
+                        if val == 0: val = d.get('valorVigente', 0)
+                        if val == 0: val = d.get('valorGlobal', 0)
+                        
+                        total_gasto += val
+                        forn = d.get('fornecedor', {}).get('nome', 'OUTROS/SIGILOSO')
+                        
                         lista_tabela.append({
                             "Data": d.get('dataAssinatura'),
-                            "Fornecedor": forn[:40],
-                            "Valor": f"R$ {val:,.2f}"
+                            "Fornecedor": forn[:30], # Corta nomes muito longos
+                            "Valor_Num": val, # Usado para gráficos
+                            "Valor": f"R$ {val:,.2f}" # Usado para exibir
                         })
-                    else: # Licitações
+                    else:
                         lista_tabela.append({
                             "Data": d.get('dataAbertura'),
-                            "Objeto": d.get('objeto', 'Sem descrição')[:100] + "...",
+                            "Objeto": d.get('objeto', 'Sem descrição')[:80] + "...",
                             "Situação": d.get('situacaoAviso', 'N/A')
                         })
-                
-                # Transforma em DF e Ordena por Data (Mais recente primeiro)
+
+                # Cria DataFrame
                 df = pd.DataFrame(lista_tabela)
-                if not df.empty and "Data" in df.columns:
-                    df = df.sort_values(by="Data", ascending=False)
                 
-                st.dataframe(df, use_container_width=True, hide_index=True)
+                # --- DASHBOARD (SÓ PARA CONTRATOS) ---
+                if tipo_busca == "contratos" and not df.empty:
+                    # 1. KPIs (Indicadores)
+                    kpi1, kpi2, kpi3 = st.columns(3)
+                    kpi1.metric("Total Analisado", f"R$ {total_gasto:,.2f}")
+                    kpi2.metric("Qtd. Contratos", len(df))
+                    media = total_gasto / len(df) if len(df) > 0 else 0
+                    kpi3.metric("Ticket Médio", f"R$ {media:,.2f}")
+                    
+                    st.markdown("### 🏆 Top Fornecedores por Valor")
+                    
+                    # 2. Gráfico de Barras
+                    # Agrupa por fornecedor e soma os valores
+                    df_chart = df.groupby("Fornecedor")["Valor_Num"].sum().reset_index()
+                    df_chart = df_chart.sort_values(by="Valor_Num", ascending=False).head(5)
+                    df_chart = df_chart.set_index("Fornecedor") # Índice vira o label do gráfico
+                    
+                    st.bar_chart(df_chart["Valor_Num"], color="#2563eb")
+                    
+                    # Limpa colunas auxiliares para a tabela final
+                    df_display = df.drop(columns=["Valor_Num"]).sort_values(by="Data", ascending=False)
+                else:
+                    df_display = df
+                
+                # Exibe Tabela
+                st.markdown("### 📋 Detalhamento dos Registros")
+                st.dataframe(df_display, use_container_width=True, hide_index=True)
+                
             else:
-                st.warning(f"Nenhum registro encontrado para {orgao_selecionado} neste período.")
-                with st.expander("Ver Detalhes do Erro"):
-                    st.write(f"Endpoint: {tipo_busca}")
-                    st.json(params)
+                st.warning("Nenhum dado encontrado para os filtros selecionados.")
