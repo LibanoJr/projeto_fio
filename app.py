@@ -27,30 +27,29 @@ def formatar_moeda(valor):
 def safe_float(valor):
     try:
         return float(valor)
-    except:
-        return 0.0
+    except: return 0.0
+
+def limpar_cnpj(cnpj):
+    return "".join([n for n in cnpj if n.isdigit()])
 
 @st.cache_data(ttl=3600)
 def consultar_dados_cadastrais(cnpj):
+    clean_cnpj = limpar_cnpj(cnpj)
     # Tenta BrasilAPI
-    clean_cnpj = "".join([n for n in cnpj if n.isdigit()])
     try:
         url = f"https://brasilapi.com.br/api/cnpj/v1/{clean_cnpj}"
-        resp = requests.get(url, timeout=5)
-        if resp.status_code == 200:
-            return resp.json()
+        resp = requests.get(url, timeout=4)
+        if resp.status_code == 200: return resp.json()
     except: pass
     
-    # Fallback: Tenta ReceitaWS (opção gratuita pública) se BrasilAPI falhar
+    # Tenta ReceitaWS (Fallback)
     try:
         url2 = f"https://www.receitaws.com.br/v1/cnpj/{clean_cnpj}"
-        resp2 = requests.get(url2, timeout=5)
+        resp2 = requests.get(url2, timeout=4)
         if resp2.status_code == 200:
-            data = resp2.json()
-            # Padroniza chaves
-            return {"razao_social": data.get('nome'), "descricao_situacao_cadastral": data.get('situacao')}
+            d = resp2.json()
+            return {"razao_social": d.get('nome'), "descricao_situacao_cadastral": d.get('situacao')}
     except: pass
-    
     return None
 
 def consultar_portal(endpoint, params):
@@ -63,17 +62,29 @@ def consultar_portal(endpoint, params):
     except: pass
     return []
 
-def auditar_empresa(cnpj, nome_empresa_input):
+def auditar_empresa(cnpj_alvo):
     resultados = []
-    cnpj_limpo = "".join([n for n in cnpj if n.isdigit()])
+    cnpj_limpo_alvo = limpar_cnpj(cnpj_alvo)
     bases = ["ceis", "cnep"]
     
-    # 1. Busca por CNPJ
+    # 1. Busca na API
     for base in bases:
-        items = consultar_portal(base, {"cnpjSancionado": cnpj_limpo, "pagina": 1})
+        items = consultar_portal(base, {"cnpjSancionado": cnpj_limpo_alvo, "pagina": 1})
+        
+        # 2. PENTE FINO (Validar se o retorno é EXATAMENTE o CNPJ buscado)
         for item in items:
-            item['_origem'] = base.upper()
-            resultados.append(item)
+            try:
+                # Extrai CNPJ do retorno (pode vir em campos diferentes)
+                cnpj_retorno = item.get('sancionado', {}).get('codigoFormatado', '')
+                if not cnpj_retorno:
+                    cnpj_retorno = item.get('pessoa', {}).get('cnpjFormatado', '')
+                
+                # Só adiciona se os números baterem
+                if limpar_cnpj(cnpj_retorno) == cnpj_limpo_alvo:
+                    item['_origem'] = base.upper()
+                    resultados.append(item)
+            except:
+                continue
             
     return resultados
 
@@ -92,27 +103,33 @@ with aba1:
         if len(cnpj_input) < 10:
             st.warning("CNPJ inválido.")
         else:
-            with st.spinner("Consultando bases federais..."):
+            with st.spinner("Realizando varredura oficial..."):
+                # Dados Cadastrais
                 cad = consultar_dados_cadastrais(cnpj_input)
-                razao_social = cad.get('razao_social', 'Razão Social Não Localizada') if cad else "Empresa Não Identificada na Base"
+                razao_social = cad.get('razao_social', 'Razão Social Não Localizada') if cad else "Empresa Não Identificada"
                 situacao = cad.get('descricao_situacao_cadastral', 'Desconhecida') if cad else "N/A"
                 
                 col_card, col_status = st.columns([3, 1])
                 col_card.info(f"🏢 **{razao_social}**")
-                col_status.metric("Situação RFB", situacao)
+                if situacao == "ATIVA":
+                    col_status.success(f"RFB: {situacao}")
+                else:
+                    col_status.warning(f"RFB: {situacao}")
                 
-                # Auditoria
-                sancoes = auditar_empresa(cnpj_input, razao_social)
+                # Auditoria (Agora com Filtro Rígido)
+                sancoes = auditar_empresa(cnpj_input)
                 
                 st.markdown("---")
                 if sancoes:
-                    st.error(f"🚨 **ALERTA: {len(sancoes)} Restrições Encontradas**")
+                    st.error(f"🚨 **ALERTA: {len(sancoes)} Restrições Confirmadas**")
                     for s in sancoes:
                         with st.expander(f"{s['_origem']} - {s.get('tipoSancao', {}).get('descricaoResumida', 'Sanção')}"):
                             st.write(f"**Órgão:** {s.get('orgaoSancionador', {}).get('nome')}")
                             st.write(f"**Motivo:** {s.get('motivo', 'Não detalhado')}")
+                            st.caption(f"Processo: {s.get('numeroProcesso')}")
                 else:
-                    st.success("✅ **NADA CONSTA** nas bases de sanções (CEIS/CNEP).")
+                    st.success(f"✅ **NADA CONSTA** para o CNPJ {cnpj_input}.")
+                    st.caption("Varredura completa nas bases CEIS (Inidôneos) e CNEP (Punidos). Nenhuma sanção vinculada exata encontrada.")
 
 # --- ABA 2: MONITORAMENTO ---
 with aba2:
@@ -121,15 +138,17 @@ with aba2:
     # Filtros
     c1, c2, c3 = st.columns([2, 1, 1])
     with c1: orgao_selecionado = st.selectbox("Órgão", list(ORGAOS_SIAFI.keys()))
-    with c2: data_ini = st.date_input("Início", datetime.now() - timedelta(days=30))
-    with c3: data_fim = st.date_input("Fim", datetime.now())
+    with c2: 
+        # DATA FORMATADA (Brasil)
+        data_ini = st.date_input("Início", datetime.now() - timedelta(days=30), format="DD/MM/YYYY")
+    with c3: 
+        data_fim = st.date_input("Fim", datetime.now(), format="DD/MM/YYYY")
     
     cod_orgao = ORGAOS_SIAFI[orgao_selecionado]
     
     if st.button("Analisar Contratos e Licitações", type="primary"):
         with st.spinner(f"Minerando dados do {orgao_selecionado}..."):
             
-            # PARÂMETROS API
             params = {
                 "dataInicial": data_ini.strftime("%d/%m/%Y"),
                 "dataFinal": data_fim.strftime("%d/%m/%Y"),
@@ -137,28 +156,18 @@ with aba2:
                 "pagina": 1
             }
             
-            # --- DEBUG VISUAL (Para resolvermos o problema do valor) ---
-            with st.expander("🛠️ DEBUG API (Clique aqui se os valores estiverem zerados)"):
-                # Fazemos uma requisição de teste só para mostrar o JSON bruto
-                raw_data = consultar_portal("contratos", params)
-                if raw_data:
-                    st.write("Estrutura do Primeiro Item encontrado:")
-                    st.json(raw_data[0])
-                else:
-                    st.warning("API retornou lista vazia.")
-
-            # BUSCA REAL
+            # Busca
             dados = consultar_portal("contratos", params)
             
             if dados:
                 lista = []
                 total = 0.0
                 for d in dados:
-                    # TENTATIVA DE RESGATE DE VALOR (Várias chaves possíveis)
+                    # Lógica Valor V22 (Prioridade: Inicial -> Global -> Vigente -> Contratado)
                     val = d.get('valorInicial', 0)
                     if val == 0: val = d.get('valorGlobal', 0)
                     if val == 0: val = d.get('valorVigente', 0)
-                    if val == 0: val = d.get('valorContratado', 0) 
+                    if val == 0: val = d.get('valorContratado', 0)
                     
                     val_float = safe_float(val)
                     total += val_float
@@ -167,26 +176,36 @@ with aba2:
                         "Data": d.get('dataAssinatura', 'N/A'),
                         "Fornecedor": d.get('fornecedor', {}).get('nome', 'Desconhecido')[:40],
                         "Objeto": d.get('objeto', 'Sem descrição')[:80] + "...",
-                        "Valor": val_float # Numérico para ordenar
+                        "Valor": val_float 
                     })
                 
                 df = pd.DataFrame(lista)
                 
-                # Exibição
+                # KPIs
                 kpi1, kpi2 = st.columns(2)
                 kpi1.metric("Total no Período", formatar_moeda(total))
                 kpi2.metric("Contratos Encontrados", len(df))
                 
                 if not df.empty and total > 0:
                     st.markdown("### 🏆 Maiores Fornecedores")
-                    df_chart = df.groupby("Fornecedor")["Valor"].sum().sort_values(ascending=False).head(5)
-                    st.bar_chart(df_chart)
+                    try:
+                        df_chart = df.groupby("Fornecedor")["Valor"].sum().sort_values(ascending=False).head(5)
+                        st.bar_chart(df_chart)
+                    except: pass
                 
                 st.markdown("### 📋 Tabela Detalhada")
-                # Formata coluna valor para visualização
                 df_view = df.copy()
                 df_view["Valor"] = df_view["Valor"].apply(formatar_moeda)
+                # Ordena por Data (Mais recente primeiro)
+                if "Data" in df_view.columns:
+                    df_view = df_view.sort_values(by="Data", ascending=False)
+                    
                 st.dataframe(df_view, use_container_width=True, hide_index=True)
                 
             else:
-                st.warning("Nenhum contrato encontrado neste período.")
+                st.warning(f"⚠️ Nenhum contrato encontrado para **{orgao_selecionado}** entre {data_ini.strftime('%d/%m')} e {data_fim.strftime('%d/%m')}.")
+                st.info("💡 Dica: O Portal da Transparência pode ter um atraso de atualização. Tente datas de 1 ou 2 meses atrás para testar.")
+                
+                with st.expander("Verificar Resposta da API (Debug)"):
+                    st.write(f"Parâmetros enviados: {params}")
+                    st.write("Retorno: [] (Lista vazia)")
