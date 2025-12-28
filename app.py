@@ -6,26 +6,21 @@ import time
 import os
 from dotenv import load_dotenv
 import google.generativeai as genai
-from google.api_core import exceptions  # Importante para pegar o erro de cota
+from google.api_core import exceptions
 
 # --- 1. CONFIGURAÇÃO E SEGURANÇA ---
-# Carrega variáveis de ambiente (arquivo .env para local)
 load_dotenv()
 
-# Tenta pegar do .env (local) OU do st.secrets (nuvem Streamlit)
 def get_secret(key_name):
-    # Tenta sistema operacional (.env)
     val = os.getenv(key_name)
     if val: return val
-    # Tenta secrets do Streamlit (nuvem)
     if key_name in st.secrets:
         return st.secrets[key_name]
     return None
 
 PORTAL_KEY = get_secret("PORTAL_KEY")
-GEMINI_KEY = get_secret("GEMINI_API_KEY") # No secrets do streamlit use GEMINI_API_KEY
+GEMINI_KEY = get_secret("GEMINI_API_KEY")
 
-# Configura IA (se a chave existir)
 IA_ATIVA = False
 if GEMINI_KEY:
     try:
@@ -41,7 +36,6 @@ st.markdown("""
         .block-container {padding-top: 2rem;}
         #MainMenu {visibility: hidden;}
         footer {visibility: hidden;}
-        /* Botão alinhado com o input */
         .stButton > button {
             width: 100%;
             margin-top: 29px;
@@ -72,7 +66,6 @@ def safe_float(valor):
     try: return float(valor)
     except: return 0.0
 
-# --- Função de Auditoria de CNPJ ---
 @st.cache_data(ttl=3600)
 def auditar_cnpj_detalhado(cnpj_alvo):
     resultados = []
@@ -90,7 +83,6 @@ def auditar_cnpj_detalhado(cnpj_alvo):
             if resp.status_code == 200:
                 itens = resp.json()
                 for item in itens:
-                    # Lógica de correspondência
                     cnpj_item = ""
                     nome_item = "Não informado"
                     try: 
@@ -117,14 +109,15 @@ def checar_risco_simples(cnpj):
     res = auditar_cnpj_detalhado(cnpj)
     return True if len(res) > 0 else False
 
-# --- Função de IA (CORE DO TCC) ---
+# --- Função de IA ---
 def analisar_objeto_ia(objeto_texto):
     if not IA_ATIVA: return "IA Off"
     if not objeto_texto: return "Vazio"
     
     try:
+        # ALTERADO AQUI: Usando 'gemini-pro' que é mais antigo e compatível
         model = genai.GenerativeModel('gemini-pro')
-
+        
         prompt = f"""Analise o seguinte objeto de contrato público e retorne APENAS 'ALTO', 'MÉDIO' ou 'BAIXO' risco.
         Considere ALTO risco se for muito genérico, vago ou envolver valores suspeitos sem detalhamento.
         Objeto: '{objeto_texto}'"""
@@ -133,9 +126,9 @@ def analisar_objeto_ia(objeto_texto):
         return response.text.strip().upper()
     
     except exceptions.ResourceExhausted:
-        return "COTA EXCEDIDA" # Mensagem amigável se estourar o limite
+        return "COTA IA EXCEDIDA" # Mensagem que vai aparecer na tabela
     except Exception as e:
-        return f"ERRO: {str(e)[:15]}..." # Trunca erro longo
+        return f"ERRO"
 
 # --- Busca de Contratos ---
 def buscar_contratos(codigo_orgao):
@@ -168,11 +161,10 @@ st.title("🛡️ Auditoria Gov Federal + IA")
 st.markdown("---")
 
 if not PORTAL_KEY:
-    st.error("🚨 ERRO CRÍTICO: Chave do Portal não configurada (configure no .env ou Secrets)")
+    st.error("🚨 ERRO CRÍTICO: Chave do Portal não configurada")
 
 aba1, aba2 = st.tabs(["🕵️ Checagem CNPJ", "📊 Auditoria de Contratos"])
 
-# --- ABA 1: FORNECEDOR ---
 with aba1:
     st.header("Investigação de Fornecedor")
     col1, col2 = st.columns([4, 1]) 
@@ -180,14 +172,12 @@ with aba1:
     
     if col2.button("Verificar Agora", type="primary"):
         with st.spinner("Consultando bases governamentais..."):
-            # 1. Nome
             try:
                 r = requests.get(f"https://minhareceita.org/{limpar_string(cnpj_input)}", timeout=3)
                 if r.status_code == 200: 
                     st.info(f"🏢 **Empresa:** {r.json().get('razao_social')}")
             except: pass
 
-            # 2. Sanções
             sancoes = auditar_cnpj_detalhado(cnpj_input)
             
             st.divider()
@@ -198,7 +188,6 @@ with aba1:
             else:
                 st.success("✅ **NADA CONSTA** - Fornecedor sem sanções ativas.")
 
-# --- ABA 2: CONTRATOS & IA ---
 with aba2:
     st.header("Monitoramento de Gastos & IA")
     
@@ -217,8 +206,6 @@ with aba2:
             for item in raw:
                 val = safe_float(item.get('valorInicialCompra') or item.get('valorFinalCompra'))
                 cnpj = item.get('fornecedor', {}).get('cnpjFormatado', '')
-                
-                # Data Formatada
                 data_crua = item.get('dataAssinatura', '')
                 try: data_fmt = datetime.strptime(data_crua, "%Y-%m-%d").strftime("%d/%m/%Y")
                 except: data_fmt = data_crua
@@ -236,8 +223,7 @@ with aba2:
             df = pd.DataFrame(tabela)
             df = df.sort_values("Valor", ascending=False)
             
-            # --- PROCESSAMENTO EM LOTE (TOP 10) ---
-            prog_text = "IA Gemini analisando riscos jurídicos..." if usar_ia else "Auditando fornecedores..."
+            prog_text = "IA Gemini analisando riscos..." if usar_ia else "Auditando..."
             bar_auditoria = st.progress(0, text=prog_text)
             
             limit = min(10, len(df))
@@ -246,38 +232,31 @@ with aba2:
                 idx = df.index[i]
                 row = df.loc[idx]
                 
-                # Checagem CNPJ
                 if row['CNPJ']:
                     if checar_risco_simples(row['CNPJ']):
                         df.at[idx, "Status CNPJ"] = "🚨 ALERTA"
                     else:
                         df.at[idx, "Status CNPJ"] = "🟢 OK"
                 
-                # Checagem IA
                 if usar_ia:
                     df.at[idx, "Risco IA"] = analisar_objeto_ia(row['Objeto'])
-                    # Pausa de segurança para não estourar limite de requisições por minuto (RPM)
-                    time.sleep(1.0) 
+                    time.sleep(1.0)
                 
                 bar_auditoria.progress((i + 1) / limit)
             
             bar_auditoria.empty()
 
-            # Métricas e Tabela
             k1, k2, k3 = st.columns(3)
-            k1.metric("Volume Analisado", f"R$ {total:,.2f}")
+            k1.metric("Volume", f"R$ {total:,.2f}")
             k2.metric("Contratos", len(df))
-            
-            # Conta riscos altos da IA
             riscos_altos = len(df[df['Risco IA'].str.contains("ALTO", na=False)])
             k3.metric("Riscos Altos (IA)", riscos_altos, delta_color="inverse")
             
-            # Estilização
             def style_risk(v):
                 if "ALTO" in str(v): return 'color: red; font-weight: bold'
                 if "MÉDIO" in str(v): return 'color: orange; font-weight: bold'
                 if "BAIXO" in str(v): return 'color: green'
-                if "COTA" in str(v): return 'color: grey; font-style: italic'
+                if "COTA" in str(v): return 'color: gray; font-style: italic'
                 return ''
                 
             def style_cnpj(v):
