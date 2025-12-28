@@ -2,7 +2,6 @@ import streamlit as st
 import requests
 import pandas as pd
 from datetime import datetime, timedelta
-import time
 import os
 from dotenv import load_dotenv
 import google.generativeai as genai
@@ -22,11 +21,10 @@ if GEMINI_KEY:
 # --- CSS OTIMIZADO ---
 st.markdown("""
     <style>
-        .block-container {padding-top: 1rem;}
+        .block-container {padding-top: 1.5rem;}
         #MainMenu {visibility: hidden;}
         footer {visibility: hidden;}
-        .stDataFrame {font-size: 0.9rem;}
-        div[data-testid="stMetricValue"] {font-size: 1.1rem;}
+        .stButton>button {width: 100%; margin-top: 29px;} /* Alinha botão com input */
     </style>
 """, unsafe_allow_html=True)
 
@@ -36,7 +34,8 @@ ORGAOS_SIAFI = {
     "Ministério da Saúde": "36000",
     "Ministério da Educação": "26000",
     "Polícia Federal": "30108",
-    "Comando do Exército": "52121"
+    "Comando do Exército": "52121",
+    "Ministério da Justiça": "30000"
 }
 
 # --- FUNÇÕES ---
@@ -64,7 +63,6 @@ def auditar_cnpj_gov(cnpj_alvo):
             r = requests.get(url, params={"cnpjSancionado": cnpj_limpo, "pagina": 1}, headers=get_headers(), timeout=4)
             if r.status_code == 200:
                 for item in r.json():
-                    # Verifica correspondência frouxa (raiz do CNPJ)
                     c = item.get('sancionado', {}).get('codigoFormatado') or item.get('pessoa', {}).get('cnpjFormatado')
                     if c and limpar_string(c)[:8] == raiz:
                         item['_origem'] = label
@@ -72,7 +70,7 @@ def auditar_cnpj_gov(cnpj_alvo):
         except: pass
     return resultados
 
-# --- IA GEMINI (V47 - Debug Real) ---
+# --- IA GEMINI (V48 - Retry Strategy) ---
 def analisar_contrato_ia(objeto_texto):
     if not GEMINI_KEY: return "⚠️ S/ Chave"
     
@@ -82,35 +80,27 @@ def analisar_contrato_ia(objeto_texto):
     Responda APENAS: 'ALTO RISCO', 'MÉDIO RISCO' ou 'BAIXO RISCO'.
     """
     
-    # Lista de modelos por prioridade
     modelos = ['gemini-1.5-flash', 'gemini-pro']
-    last_error = ""
-
+    
     for modelo in modelos:
         try:
             model = genai.GenerativeModel(modelo)
             response = model.generate_content(prompt)
             return response.text.strip()
-        except Exception as e:
-            last_error = str(e)
-            continue
+        except: continue
             
-    # Se chegou aqui, falhou tudo. Retorna o erro real para debug
-    if "404" in last_error: return "Erro: Modelo 404 (Update pip)"
-    if "403" in last_error: return "Erro: Chave Inválida"
-    if "429" in last_error: return "Erro: Limite Excedido"
-    return f"Erro: {last_error[:15]}..."
+    return "Erro Conexão IA"
 
 # --- BUSCA CONTRATOS ---
 def buscar_contratos(codigo_orgao):
     lista = []
     dt_fim = datetime.now()
-    dt_ini = dt_fim - timedelta(days=730) # 2 anos
+    dt_ini = dt_fim - timedelta(days=730)
     
-    # Barra de progresso visual
-    bar = st.progress(0, text="Conectando ao Portal...")
+    placeholder = st.empty()
+    bar = placeholder.progress(0, text="Conectando ao Portal...")
     
-    for i, pag in enumerate(range(1, 4)): # Busca até 3 páginas
+    for i, pag in enumerate(range(1, 4)):
         bar.progress((i+1)*30, text=f"Baixando Contratos (Pág {pag})...")
         try:
             params = {
@@ -127,11 +117,11 @@ def buscar_contratos(codigo_orgao):
                 lista.extend(d)
             else: break
         except: break
-    bar.empty()
+    placeholder.empty()
     return lista
 
 # --- INTERFACE ---
-st.title("🛡️ Auditoria Gov Federal + IA (V47 Final)")
+st.title("🛡️ Auditoria Gov Federal + IA (V48)")
 st.markdown("---")
 
 tab1, tab2 = st.tabs(["🔎 Auditoria CNPJ", "📊 Monitor de Contratos"])
@@ -140,26 +130,35 @@ tab1, tab2 = st.tabs(["🔎 Auditoria CNPJ", "📊 Monitor de Contratos"])
 with tab1:
     st.header("Investigação de Fornecedor")
     col1, col2 = st.columns([3, 1])
-    cnpj_input = col1.text_input("Digite o CNPJ:", "05.144.757/0001-72")
-    if col2.button("Verificar Agora", type="primary"):
+    
+    with col1:
+        cnpj_input = st.text_input("CNPJ:", "05.144.757/0001-72")
+    with col2:
+        # Botão alinhado pelo CSS
+        btn_check = st.button("Verificar Agora", type="primary")
+
+    if btn_check:
         st.write("⏳ Consultando bases governamentais...")
         
-        # Nome da Empresa
+        # Nome da Empresa (Soft Fail)
+        nome_display = "Nome não obtido (API Externa Instável)"
         try:
-            r = requests.get(f"https://minhareceita.org/{limpar_string(cnpj_input)}", timeout=5)
-            nome = r.json().get('razao_social', 'Nome Indisponível')
-            st.info(f"🏢 **{nome}**")
-        except: st.warning("⚠️ MinhaReceita indisponível, seguindo auditoria...")
+            r = requests.get(f"https://minhareceita.org/{limpar_string(cnpj_input)}", timeout=3)
+            if r.status_code == 200:
+                nome_display = r.json().get('razao_social', nome_display)
+        except: pass
+        
+        st.info(f"🏢 **Fornecedor:** {nome_display}")
 
         # Sanções
         sancoes = auditar_cnpj_gov(cnpj_input)
         st.divider()
         if sancoes:
-            st.error(f"🚨 **ALERTA: {len(sancoes)} OCORRÊNCIAS ENCONTRADAS**")
+            st.error(f"🚨 **ALERTA VERMELHO: {len(sancoes)} RESTRIÇÕES**")
             for s in sancoes:
                 st.write(f"❌ **{s['_origem']}**: {s.get('motivo', 'Sem detalhes')}")
         else:
-            st.success("✅ **Ficha Limpa:** Nenhuma sanção ativa encontrada.")
+            st.success("✅ **FICHA LIMPA:** Nenhuma sanção ativa encontrada no Governo Federal.")
 
 # TAB 2: CONTRATOS + IA
 with tab2:
@@ -172,7 +171,6 @@ with tab2:
         raw_data = buscar_contratos(ORGAOS_SIAFI[orgao_selecionado])
         
         if raw_data:
-            # Prepara Tabela
             rows = []
             for item in raw_data:
                 rows.append({
@@ -183,20 +181,27 @@ with tab2:
                     "Status CNPJ": "⚪"
                 })
             
+            # Pega Top 8 maiores valores
             df = pd.DataFrame(rows).sort_values("Valor", ascending=False).head(8)
             
-            # Processamento
+            # --- CORREÇÃO DO CRASH DA BARRA DE PROGRESSO ---
             if ativar_ia:
                 prog_bar = st.progress(0, text="IA Analisando contratos...")
-                for idx, row in df.iterrows():
+                
+                # Usamos enumerate para garantir contador de 0 a N correto
+                for i, (index, row) in enumerate(df.iterrows()):
+                    
                     # 1. Checa CNPJ
                     if row["CNPJ"]:
                         is_bad = auditar_cnpj_gov(row["CNPJ"])
-                        df.at[idx, "Status CNPJ"] = "🚨 ALERTA" if is_bad else "✅ OK"
+                        df.at[index, "Status CNPJ"] = "🚨 ALERTA" if is_bad else "✅ OK"
                     
                     # 2. Checa IA
-                    df.at[idx, "Risco IA"] = analisar_contrato_ia(row["Objeto"])
-                    prog_bar.progress((idx + 1) / len(df))
+                    df.at[index, "Risco IA"] = analisar_contrato_ia(row["Objeto"])
+                    
+                    # Atualiza barra (Matemática segura: i+1 dividido pelo total)
+                    prog_bar.progress((i + 1) / len(df))
+                    
                 prog_bar.empty()
             
             # Estilos
@@ -206,10 +211,15 @@ with tab2:
                 if "Erro" in str(v): return 'color: orange'
                 return ''
                 
+            def style_cnpj(v):
+                if "ALERTA" in str(v): return 'color: red; font-weight: bold'
+                return 'color: green'
+
             st.dataframe(
                 df.style.applymap(style_risk, subset=['Risco IA'])
+                        .applymap(style_cnpj, subset=['Status CNPJ'])
                         .format({"Valor": "R$ {:,.2f}"}),
                 use_container_width=True
             )
         else:
-            st.warning("Nenhum contrato encontrado no período.")
+            st.warning("Nenhum contrato encontrado neste período.")
