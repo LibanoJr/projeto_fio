@@ -6,14 +6,24 @@ import time
 import os
 from dotenv import load_dotenv
 import google.generativeai as genai
+from google.api_core import exceptions  # Importante para pegar o erro de cota
 
 # --- 1. CONFIGURAÇÃO E SEGURANÇA ---
-# Carrega variáveis de ambiente (arquivo .env)
+# Carrega variáveis de ambiente (arquivo .env para local)
 load_dotenv()
 
-# Recupera chaves de forma segura (conforme solicitado na análise)
-PORTAL_KEY = os.getenv("PORTAL_KEY")
-GEMINI_KEY = os.getenv("GEMINI_API_KEY")
+# Tenta pegar do .env (local) OU do st.secrets (nuvem Streamlit)
+def get_secret(key_name):
+    # Tenta sistema operacional (.env)
+    val = os.getenv(key_name)
+    if val: return val
+    # Tenta secrets do Streamlit (nuvem)
+    if key_name in st.secrets:
+        return st.secrets[key_name]
+    return None
+
+PORTAL_KEY = get_secret("PORTAL_KEY")
+GEMINI_KEY = get_secret("GEMINI_API_KEY") # No secrets do streamlit use GEMINI_API_KEY
 
 # Configura IA (se a chave existir)
 IA_ATIVA = False
@@ -113,17 +123,20 @@ def analisar_objeto_ia(objeto_texto):
     if not objeto_texto: return "Vazio"
     
     try:
-        # Prompt otimizado para classificação de risco conforme sugestão do PDF
-        # Tente este modelo coringa que apareceu na sua lista
-        model = genai.GenerativeModel('gemini-flash-latest')
+        # CORREÇÃO CRÍTICA: Mudado para gemini-1.5-flash (mais estável e com cota maior)
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        
         prompt = f"""Analise o seguinte objeto de contrato público e retorne APENAS 'ALTO', 'MÉDIO' ou 'BAIXO' risco.
         Considere ALTO risco se for muito genérico, vago ou envolver valores suspeitos sem detalhamento.
         Objeto: '{objeto_texto}'"""
         
         response = model.generate_content(prompt)
         return response.text.strip().upper()
+    
+    except exceptions.ResourceExhausted:
+        return "COTA EXCEDIDA" # Mensagem amigável se estourar o limite
     except Exception as e:
-        return f"ERRO: {str(e)}"
+        return f"ERRO: {str(e)[:15]}..." # Trunca erro longo
 
 # --- Busca de Contratos ---
 def buscar_contratos(codigo_orgao):
@@ -156,7 +169,7 @@ st.title("🛡️ Auditoria Gov Federal + IA")
 st.markdown("---")
 
 if not PORTAL_KEY:
-    st.error("🚨 ERRO CRÍTICO: Chave do Portal não configurada no arquivo .env")
+    st.error("🚨 ERRO CRÍTICO: Chave do Portal não configurada (configure no .env ou Secrets)")
 
 aba1, aba2 = st.tabs(["🕵️ Checagem CNPJ", "📊 Auditoria de Contratos"])
 
@@ -244,6 +257,8 @@ with aba2:
                 # Checagem IA
                 if usar_ia:
                     df.at[idx, "Risco IA"] = analisar_objeto_ia(row['Objeto'])
+                    # Pausa de segurança para não estourar limite de requisições por minuto (RPM)
+                    time.sleep(1.0) 
                 
                 bar_auditoria.progress((i + 1) / limit)
             
@@ -261,8 +276,9 @@ with aba2:
             # Estilização
             def style_risk(v):
                 if "ALTO" in str(v): return 'color: red; font-weight: bold'
-                if "MÉDIO" in str(v): return 'color: orange; font-weight: bold' # Adicionei Médio tbm
+                if "MÉDIO" in str(v): return 'color: orange; font-weight: bold'
                 if "BAIXO" in str(v): return 'color: green'
+                if "COTA" in str(v): return 'color: grey; font-style: italic'
                 return ''
                 
             def style_cnpj(v):

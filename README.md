@@ -28,3 +28,19 @@ Siga os passos abaixo para executar a aplicação em sua máquina.
 ```bash
 git clone [https://github.com/LibanoJr/projeto_fio.git](https://github.com/LibanoJr/projeto_fio.git)
 cd projeto_fio
+
+### 2. Criar Ambiente Virtual
+python -m venv venv
+source venv/bin/activate  # Linux/Mac
+venv\Scripts\activate     # Windows
+
+### 3. Instalar Dependências
+pip install -r requirements.txt
+
+### 4. Configurar Variáveis de Ambiente
+Crie um arquivo `.env` na raiz do projeto com:
+PORTAL_KEY=sua_chave_portal_transparencia
+GEMINI_API_KEY=sua_chave_google_gemini
+
+### 5. Executar a Aplicação
+streamlit run app.py
