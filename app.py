@@ -11,13 +11,28 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- CSS (VISUAL LIMPO) ---
+# --- CSS (CORREÇÕES VISUAIS V44) ---
 st.markdown("""
     <style>
+        /* Espaçamento superior */
         .block-container {padding-top: 2rem;}
+        
+        /* Esconder menus do Streamlit */
         #MainMenu {visibility: hidden;}
         footer {visibility: hidden;}
-        .stMetric {background-color: #f8f9fa; padding: 15px; border-radius: 8px; border-left: 5px solid #1f77b4;}
+        
+        /* CORREÇÃO 1: Alinhar botão de Auditar com o input de texto */
+        [data-testid="column"]:nth-child(2) div[data-testid="stVerticalBlock"] > div:has(button) {
+            display: flex;
+            align-items: flex-end;
+            height: 100%;
+        }
+        /* Ajuste fino para ficar na mesma linha de base */
+        [data-testid="column"]:nth-child(2) button {
+            margin-bottom: 2px; 
+        }
+
+        /* CORREÇÃO 2: Removido o CSS que deixava as métricas brancas e bugadas no dark mode */
     </style>
 """, unsafe_allow_html=True)
 
@@ -84,7 +99,6 @@ def auditar_cnpj_detalhado(cnpj_alvo):
     return resultados
 
 def checar_risco_simples(cnpj):
-    # Função rápida para usar na tabela
     res = auditar_cnpj_detalhado(cnpj)
     return True if len(res) > 0 else False
 
@@ -92,10 +106,7 @@ def buscar_contratos(codigo_orgao):
     lista = []
     dt_fim = datetime.now()
     dt_ini = dt_fim - timedelta(days=730)
-    
-    # Barra visual
     bar = st.progress(0, text="Iniciando conexão...")
-    
     for i, pag in enumerate(range(1, 4)):
         bar.progress((i+1)*33, text=f"Baixando página {pag} de contratos...")
         try:
@@ -118,16 +129,17 @@ def buscar_contratos(codigo_orgao):
 st.title("🛡️ Auditoria Gov Federal")
 st.markdown("---")
 
-# ABAS VOLTARAM AQUI!
 aba1, aba2 = st.tabs(["🕵️ Análise de Risco (CNPJ)", "💰 Monitor de Contratos"])
 
 # --- ABA 1: CNPJ ---
 with aba1:
     st.header("Verificar Fornecedor")
-    col1, col2 = st.columns([3, 1])
+    # Layout de colunas ajustado pelo CSS no início do código
+    col1, col2 = st.columns([4, 1]) 
     cnpj_input = col1.text_input("CNPJ:", value="05.144.757/0001-72", placeholder="00.000.000/0000-00")
     
-    if col2.button("🔍 Auditar", type="primary"):
+    # Botão agora alinhado pelo CSS
+    if col2.button("🔍 Auditar", type="primary", use_container_width=True):
         with st.spinner("Analisando sanções..."):
             try:
                 r = requests.get(f"https://minhareceita.org/{limpar_string(cnpj_input)}", timeout=3)
@@ -175,7 +187,8 @@ with aba2:
                     "Fornecedor": item.get('fornecedor', {}).get('nome', 'N/A')[:40],
                     "CNPJ": cnpj,
                     "Objeto": item.get('objeto', '')[:100],
-                    "Risco": "⚪ N/A"
+                    # CORREÇÃO 3: Nome da coluna alterado
+                    "Situação da Empresa": "⚪ N/A" 
                 })
             
             df = pd.DataFrame(tabela)
@@ -193,14 +206,16 @@ with aba2:
                         status_cache[c] = "🔴 ALERTA" if is_sujo else "🟢 OK"
                         time.sleep(0.1)
                 
-                df['Risco'] = df['CNPJ'].map(status_cache).fillna("⚪ N/A")
+                # Mapeia usando o novo nome da coluna
+                df['Situação da Empresa'] = df['CNPJ'].map(status_cache).fillna("⚪ N/A")
 
             # Métricas
             k1, k2, k3 = st.columns(3)
             k1.metric("Total Gasto", f"R$ {total:,.2f}")
             k2.metric("Qtd. Contratos", len(df))
             if analisar_risco:
-                suspeitos = len(df[df['Risco'] == "🔴 ALERTA"])
+                # Conta usando o novo nome da coluna
+                suspeitos = len(df[df['Situação da Empresa'] == "🔴 ALERTA"])
                 k3.metric("Fornecedores Suspeitos", suspeitos, delta_color="inverse")
             
             # Botão CSV
@@ -214,7 +229,8 @@ with aba2:
                 return ''
 
             st.dataframe(
-                df.style.applymap(color_risk, subset=['Risco']).format({"Valor (R$)": "R$ {:,.2f}"}),
+                # Aplica estilo e formatação na nova coluna
+                df.style.applymap(color_risk, subset=['Situação da Empresa']).format({"Valor (R$)": "R$ {:,.2f}"}),
                 use_container_width=True, hide_index=True
             )
         else:
