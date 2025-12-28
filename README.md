@@ -44,10 +44,20 @@ O sistema é capaz de gerar pareceres técnicos detalhados. Abaixo, um exemplo r
 
 ---
 
+## ⚙️ Notas de Performance e Limitações
+
+Devido à latência da API do Portal da Transparência, o sistema implementa uma estratégia de otimização na aba **"Monitor de Contratos"**:
+
+1.  **Filtro de Relevância:** O sistema audita automaticamente os **10 maiores contratos** (baseado no valor financeiro) listados na busca.
+2.  **Status N/A:** Contratos fora do "Top 10" ou que não possuem CNPJ informado pela API recebem o status `⚪ N/A` (Não Analisado) para garantir que a aplicação não trave por excesso de requisições simultâneas.
+3.  **API Externa:** A disponibilidade dos dados depende 100% do tempo de resposta dos servidores do Governo Federal (`api.portaldatransparencia.gov.br`).
+
+---
+
 ## ⚙️ Instalação e Execução
 
 ### Pré-requisitos
-1. **Python 3.x** instalado.
+1. **Python 3.8+** instalado.
 2. Chave de API do **Portal da Transparência** (Cadastro no Fala.BR).
 3. Chave de API do **Google AI Studio** (Gemini).
 
