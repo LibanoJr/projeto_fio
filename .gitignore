@@ -1,21 +1,17 @@
-# --- Ambiente e Segurança ---
-venv/
+# Ignorar arquivos temporários do Python
 __pycache__/
+*.pyc
+
+# Ignorar ambiente virtual (pesado e desnecessário no git)
+venv/
+.venv/
+env/
+
+# SEGURANÇA: NUNCA enviar suas senhas/chaves
 .env
 
-# --- Pastas de Backup e Dados Locais ---
-_ARQUIVOS_ANTIGOS/
-_VERSOES_ANTIGAS/
-data/
+# Arquivos de sistema do Mac (lixo que o Finder cria)
+.DS_Store
 
-# --- Arquivos Temporários e Logs ---
-*.log
-*.html
-*.png
-*.db
-*.sqlite3
-
-# --- Documentação ---
-# Ignora markdowns genéricos, mas FORÇA a inclusão do README
-*.md
-!README.md
+# Arquivos temporários do Streamlit (se houver)
+.streamlit/secrets.toml
