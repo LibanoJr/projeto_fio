@@ -11,28 +11,19 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- CSS (CORREÇÕES VISUAIS V44) ---
+# --- CSS (CORREÇÕES VISUAIS) ---
 st.markdown("""
     <style>
-        /* Espaçamento superior */
         .block-container {padding-top: 2rem;}
         
-        /* Esconder menus do Streamlit */
         #MainMenu {visibility: hidden;}
         footer {visibility: hidden;}
         
-        /* CORREÇÃO 1: Alinhar botão de Auditar com o input de texto */
-        [data-testid="column"]:nth-child(2) div[data-testid="stVerticalBlock"] > div:has(button) {
-            display: flex;
-            align-items: flex-end;
-            height: 100%;
+        /* CORREÇÃO 1: Botão alinhado perfeitamente com o Input */
+        .stButton > button {
+            width: 100%;
+            margin-top: 29px; /* Empurra o botão para baixo para alinhar com a caixa de texto */
         }
-        /* Ajuste fino para ficar na mesma linha de base */
-        [data-testid="column"]:nth-child(2) button {
-            margin-bottom: 2px; 
-        }
-
-        /* CORREÇÃO 2: Removido o CSS que deixava as métricas brancas e bugadas no dark mode */
     </style>
 """, unsafe_allow_html=True)
 
@@ -134,12 +125,11 @@ aba1, aba2 = st.tabs(["🕵️ Análise de Risco (CNPJ)", "💰 Monitor de Contr
 # --- ABA 1: CNPJ ---
 with aba1:
     st.header("Verificar Fornecedor")
-    # Layout de colunas ajustado pelo CSS no início do código
     col1, col2 = st.columns([4, 1]) 
     cnpj_input = col1.text_input("CNPJ:", value="05.144.757/0001-72", placeholder="00.000.000/0000-00")
     
-    # Botão agora alinhado pelo CSS
-    if col2.button("🔍 Auditar", type="primary", use_container_width=True):
+    # CSS corrigido cuidará do alinhamento aqui
+    if col2.button("🔍 Auditar", type="primary"):
         with st.spinner("Analisando sanções..."):
             try:
                 r = requests.get(f"https://minhareceita.org/{limpar_string(cnpj_input)}", timeout=3)
@@ -166,7 +156,7 @@ with aba2:
     
     c_input, c_chk = st.columns([3, 1])
     orgao_nome = c_input.selectbox("Selecione o Órgão:", list(ORGAOS_SIAFI.keys()))
-    analisar_risco = c_chk.checkbox("Ativar Radar de Risco", value=True, help="Audita os 10 maiores fornecedores encontrados.")
+    analisar_risco = c_chk.checkbox("Ativar Radar de Risco", value=True)
     
     if st.button("📥 Baixar Dados"):
         cod = ORGAOS_SIAFI[orgao_nome]
@@ -180,14 +170,22 @@ with aba2:
                 val = safe_float(item.get('valorInicialCompra') or item.get('valorFinalCompra'))
                 cnpj = item.get('fornecedor', {}).get('cnpjFormatado', '')
                 
+                # CORREÇÃO 2: Formatar Data
+                data_crua = item.get('dataAssinatura', '')
+                data_fmt = data_crua
+                try:
+                    # Tenta converter para BR (assumindo que vem YYYY-MM-DD da API)
+                    data_obj = datetime.strptime(data_crua, "%Y-%m-%d")
+                    data_fmt = data_obj.strftime("%d/%m/%Y")
+                except: pass
+
                 total += val
                 tabela.append({
-                    "Data": item.get('dataAssinatura'),
+                    "Data": data_fmt,
                     "Valor (R$)": val,
                     "Fornecedor": item.get('fornecedor', {}).get('nome', 'N/A')[:40],
                     "CNPJ": cnpj,
                     "Objeto": item.get('objeto', '')[:100],
-                    # CORREÇÃO 3: Nome da coluna alterado
                     "Situação da Empresa": "⚪ N/A" 
                 })
             
@@ -206,15 +204,17 @@ with aba2:
                         status_cache[c] = "🔴 ALERTA" if is_sujo else "🟢 OK"
                         time.sleep(0.1)
                 
-                # Mapeia usando o novo nome da coluna
                 df['Situação da Empresa'] = df['CNPJ'].map(status_cache).fillna("⚪ N/A")
+
+            # CORREÇÃO 3: Reordenar Colunas (Status ao lado do CNPJ)
+            colunas_ordem = ["Data", "Valor (R$)", "Fornecedor", "CNPJ", "Situação da Empresa", "Objeto"]
+            df = df[colunas_ordem]
 
             # Métricas
             k1, k2, k3 = st.columns(3)
             k1.metric("Total Gasto", f"R$ {total:,.2f}")
             k2.metric("Qtd. Contratos", len(df))
             if analisar_risco:
-                # Conta usando o novo nome da coluna
                 suspeitos = len(df[df['Situação da Empresa'] == "🔴 ALERTA"])
                 k3.metric("Fornecedores Suspeitos", suspeitos, delta_color="inverse")
             
@@ -222,14 +222,13 @@ with aba2:
             csv = df.to_csv(index=False).encode('utf-8')
             st.download_button("💾 Download CSV", csv, "auditoria_gov.csv", "text/csv")
             
-            # Tabela Colorida
+            # Estilização
             def color_risk(val):
                 if val == '🔴 ALERTA': return 'background-color: #ffcccc; color: red; font-weight: bold;'
                 if val == '🟢 OK': return 'color: green; font-weight: bold;'
                 return ''
 
             st.dataframe(
-                # Aplica estilo e formatação na nova coluna
                 df.style.applymap(color_risk, subset=['Situação da Empresa']).format({"Valor (R$)": "R$ {:,.2f}"}),
                 use_container_width=True, hide_index=True
             )
