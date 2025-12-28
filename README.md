@@ -15,53 +15,45 @@ Diferente de sistemas tradicionais que analisam apenas números, o FIO atua como
 - **🔍 Detecção de Riscos:**
   - Identificação de objetos genéricos ou obscuros.
   - Alerta para contratos com Valor R$ 0,00 (risco de falta de empenho ou erro de cadastro).
-  - Verificação de datas e vigências suspeitas (ex: dados legados).
-- **📄 Geração de Dossiê:** Criação automática de relatórios em formato Markdown prontos para apresentação.
+  - Verificação de datas e vigências suspeitas.
+- **🛡️ Auditoria de Fornecedores:** Cruzamento automático de CNPJ com listas de sanções (CEIS/CNEP/Leniência).
+- **📄 Relatórios Visuais:** Interface interativa para apresentação de dados.
 
 ---
 
 ## 🛠️ Tecnologias Utilizadas
 
-- **Linguagem:** Python 3.x
-- **Integração API:** `requests` (Consumo de API REST do Governo Federal)
-- **Inteligência Artificial:** `google-generativeai` (Google Gemini Flash)
-- **Estrutura de Dados:** JSON e Manipulação de Arquivos
+- **Interface:** Streamlit (Python)
+- **Integração API:** `requests` (Portal da Transparência & MinhaReceita)
+- **Inteligência Artificial:** `google-generativeai` (Google Gemini 1.5 Flash / Pro)
+- **Segurança:** `python-dotenv` (Gestão de chaves de API)
 
 ---
 
 ## 📊 Exemplo de Auditoria Real
 
-O sistema é capaz de gerar pareceres técnicos detalhados. Abaixo, um exemplo real de saída do sistema detectando uma inconsistência financeira:
+O sistema é capaz de gerar pareceres técnicos detalhados. Abaixo, um exemplo real de saída do sistema detectando uma inconsistência:
 
-> **CONTRATO Nº 322005 (MEC)**
+> **CONTRATO (MEC)**
 >
 > **Objeto:** *Fornecimento de energia elétrica tarifa horo-sazonal...*
 > **Valor Declarado:** R$ 0,00
 >
 > **🧠 Parecer da IA:**
-> **Risco Identificado (ALTO):** O valor zerado é inadequado para um serviço contínuo e oneroso (energia). Indica falha no cadastro ou falta de transparência orçamentária, impedindo a fiscalização do custo efetivo.
+> **Risco Identificado (ALTO):** O valor zerado é inadequado para um serviço contínuo e oneroso (energia). Indica falha no cadastro ou falta de transparência, impedindo a fiscalização do custo efetivo.
 
 ---
 
-## ⚙️ Como Executar
+## ⚙️ Instalação e Execução
 
 ### Pré-requisitos
-- Python instalado.
-- Chave de API do [Portal da Transparência](https://api.portaldatransparencia.gov.br/).
-- Chave de API do [Google AI Studio](https://aistudio.google.com/).
+1. **Python 3.x** instalado.
+2. Chave de API do **Portal da Transparência** (Cadastro no Fala.BR).
+3. Chave de API do **Google AI Studio** (Gemini).
 
-### Instalação
+### Passo a Passo
 
-1. Clone o repositório:
+1. **Clone o repositório:**
    ```bash
-   git clone [https://github.com/seu-usuario/projeto-fio.git](https://github.com/seu-usuario/projeto-fio.git)
-
-   ## 🖥️ Interface Web (Streamlit)
-
-O projeto conta com uma interface visual para facilitar a auditoria.
-
-1. Ative o ambiente virtual (se ainda não estiver):
-   ```bash
-   source venv/bin/activate  # Mac/Linux
-   # ou
-   venv\Scripts\activate     # Windows
+   git clone [https://github.com/LibanoJr/projeto_fio.git](https://github.com/LibanoJr/projeto_fio.git)
+   cd projeto_fio
