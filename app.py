@@ -101,27 +101,29 @@ def checar_risco_simples(cnpj):
     return True if len(res) > 0 else False
 
 # --- IA ---
+# --- Função de IA (MODO DEBUG E SEGURANÇA) ---
 def analisar_objeto_ia(objeto_texto):
-    if not IA_ATIVA: return "IA Off"
-    if not objeto_texto: return "Vazio"
+    if not IA_ATIVA: return "IA NÃO CONFIGURADA"
+    if not objeto_texto: return "Texto Vazio"
     
     try:
-        # TENTATIVA DUPLA: Tenta o modelo novo, se falhar, tenta o antigo
-        try:
-            model = genai.GenerativeModel('gemini-2.5-flash')
-            response = model.generate_content(f"Analise e retorne APENAS 'ALTO', 'MÉDIO' ou 'BAIXO' risco. Objeto: '{objeto_texto}'")
-            return response.text.strip().upper()
-        except:
-            # Fallback para o modelo antigo se o novo der erro 404
-            model = genai.GenerativeModel('gemini-pro')
-            response = model.generate_content(f"Analise e retorne APENAS 'ALTO', 'MÉDIO' ou 'BAIXO' risco. Objeto: '{objeto_texto}'")
-            return response.text.strip().upper()
-            
+        # Usando o modelo mais compatível e estável do Google (evita erro 404 e erro de cota baixa)
+        model = genai.GenerativeModel('gemini-pro')
+        
+        prompt = f"""Analise o objeto deste contrato público e responda APENAS com uma destas palavras: 'ALTO', 'MÉDIO' ou 'BAIXO'.
+        Classifique como ALTO se for vago, genérico (ex: 'aquisição de materiais') ou suspeito.
+        Objeto: '{objeto_texto}'"""
+        
+        # Tenta gerar a resposta
+        response = model.generate_content(prompt)
+        return response.text.strip().upper()
+    
     except exceptions.ResourceExhausted:
-        return "COTA EXCEDIDA"
+        return "COTA DIÁRIA EXCEDIDA"  # Agora sabemos se foi o limite
     except Exception as e:
-        return "ERRO"
-
+        # ISSO VAI MOSTRAR O ERRO REAL NA TABELA PARA GENTE SABER O QUE É
+        return f"ERRO: {str(e)}"
+    
 # --- BUSCA ---
 def buscar_contratos(codigo_orgao):
     if not PORTAL_KEY: return []
