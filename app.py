@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 import google.generativeai as genai
 
 # --- CONFIGURAÇÃO INICIAL E SEGURANÇA ---
-st.set_page_config(page_title="GovAudit Pro + IA", page_icon="🤖", layout="wide")
+st.set_page_config(page_title="GovAudit Pro + IA", page_icon="⚖️", layout="wide")
 load_dotenv() # Carrega variáveis do arquivo .env
 
 # Recupera chaves de forma segura
@@ -19,7 +19,8 @@ GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 if GEMINI_KEY:
     genai.configure(api_key=GEMINI_KEY)
 else:
-    st.warning("⚠️ Chave GEMINI_API_KEY não encontrada no arquivo .env. A IA não funcionará.")
+    # Aviso discreto no sidebar para não quebrar o layout
+    st.sidebar.warning("⚠️ Chave GEMINI_API_KEY não encontrada no .env")
 
 # --- CSS (Visual Polido) ---
 st.markdown("""
@@ -62,7 +63,7 @@ def formatar_data_br(data_iso):
 # --- FUNÇÃO 1: AUDITORIA GOVERNAMENTAL (CNPJ) ---
 @st.cache_data(ttl=3600)
 def auditar_cnpj_gov(cnpj_alvo):
-    resultados = []  # Variável criada em PORTUGUÊS
+    resultados = [] 
     cnpj_limpo = limpar_string(cnpj_alvo)
     raiz_alvo = cnpj_limpo[:8]
     bases = {"acordos-leniencia": "Leniência", "ceis": "Inidôneos", "cnep": "Punidos"}
@@ -92,7 +93,7 @@ def auditar_cnpj_gov(cnpj_alvo):
                         resultados.append(item)
         except: pass
         
-    return resultados # CORRIGIDO: Retornando a variável correta (antes estava 'results')
+    return resultados
 
 def checar_antecedentes(cnpj):
     res = auditar_cnpj_gov(cnpj)
@@ -101,26 +102,26 @@ def checar_antecedentes(cnpj):
 # --- FUNÇÃO 2: ANÁLISE SEMÂNTICA COM IA (GEMINI) ---
 def analisar_contrato_ia(objeto_texto):
     if not GEMINI_KEY: return "⚠️ S/ Chave"
-    if not objeto_texto or len(objeto_texto) < 10: return "⚪ Insuficiente"
+    if not objeto_texto or len(objeto_texto) < 5: return "⚪ Vazio"
     
     try:
-        # Prompt Otimizado para o TCC
+        # Prompt Otimizado
         prompt = f"""
-        Você é um auditor de conformidade pública. Analise o seguinte Objeto de Contrato:
-        "{objeto_texto}"
-        
-        Classifique o risco de corrupção ou irregularidade baseada na descrição.
-        Responda APENAS com uma das etiquetas abaixo:
-        'ALTO RISCO' (se for muito genérico ou atípico)
-        'MÉDIO RISCO' (se for vago mas comum)
-        'BAIXO RISCO' (se for específico e claro)
+        Você é um auditor. Analise o Objeto de Contrato abaixo e classifique o risco de 
+        irregularidade/vaguidade. Responda APENAS: 'ALTO RISCO', 'MÉDIO RISCO' ou 'BAIXO RISCO'.
+        Objeto: "{objeto_texto}"
         """
         
+        # Tenta usar o modelo Flash (mais rápido e barato)
         model = genai.GenerativeModel('gemini-1.5-flash')
         response = model.generate_content(prompt)
         return response.text.strip()
     except Exception as e:
-        return "⚠️ Erro IA"
+        # Retorna o erro real para sabermos o que é (Ex: API Key invalida)
+        erro_msg = str(e)
+        if "API_KEY" in erro_msg: return "⚠️ Chave Inválida"
+        if "429" in erro_msg: return "⚠️ Muitos Pedidos"
+        return "⚠️ Erro Conexão"
 
 # --- FUNÇÃO DE BUSCA (CONTRATOS) ---
 def buscar_contratos(codigo_orgao):
@@ -148,29 +149,48 @@ def buscar_contratos(codigo_orgao):
     return lista
 
 # --- INTERFACE ---
-st.title("🤖 GovAudit Pro + IA Gemini")
+st.title("🛡️ Auditoria Gov Federal + IA")
 st.markdown("---")
 
 aba1, aba2 = st.tabs(["🕵️ Auditoria (CNPJ)", "💰 Monitor + Inteligência Artificial"])
 
-# --- ABA 1 ---
+# --- ABA 1: CNPJ ---
 with aba1:
     st.header("Verificação de Antecedentes (Base Governamental)")
     c1, c2 = st.columns([4, 1])
     cnpj_in = c1.text_input("CNPJ:", value="05.144.757/0001-72")
-    c2.write(""); c2.write("")
+    c2.write(""); c2.write("") # Espaçador
+    
     if c2.button("🔍 Verificar", type="primary", use_container_width=True):
-        with st.spinner("Consultando bases de sanções..."):
+        
+        # 1. Recupera Nome da Empresa (Minha Receita) - RESTAURADO!
+        with st.spinner("Buscando dados cadastrais..."):
+            try:
+                r_receita = requests.get(f"https://minhareceita.org/{limpar_string(cnpj_in)}", timeout=5)
+                if r_receita.status_code == 200:
+                    dados = r_receita.json()
+                    razao = dados.get('razao_social', 'Nome não encontrado')
+                    fantasia = dados.get('nome_fantasia', '')
+                    nome_exibir = f"{razao} ({fantasia})" if fantasia else razao
+                    st.info(f"🏢 **Empresa:** {nome_exibir}")
+                else:
+                    st.warning("⚠️ Não foi possível confirmar o nome da empresa na Receita Federal.")
+            except:
+                st.warning("⚠️ API da Receita Federal instável no momento.")
+
+        # 2. Busca Sanções
+        with st.spinner("Consultando listas de punidos (CEIS/CNEP)..."):
             sancoes = auditar_cnpj_gov(cnpj_in)
             st.divider()
+            
             if sancoes: 
                 st.error(f"🚨 **RISCO DETECTADO: {len(sancoes)} REGISTROS**")
                 for s in sancoes:
-                    st.write(f"⚠️ **{s['_origem']}**: {s.get('motivo') or 'Sem motivo detalhado'}")
+                    st.write(f"⚠️ **{s['_origem']}**: {s.get('motivo') or s.get('situacaoAcordo') or 'Sem detalhes'}")
             else:
-                st.success("✅ **NADA CONSTA**")
+                st.success("✅ **NADA CONSTA** - Fornecedor sem sanções ativas.")
 
-# --- ABA 2 ---
+# --- ABA 2: CONTRATOS ---
 with aba2:
     st.header("Análise Híbrida: Dados + IA Generativa")
     
@@ -185,7 +205,6 @@ with aba2:
             tabela = []
             total = 0.0
             
-            # Prepara dados iniciais
             for item in raw:
                 val = safe_float(item.get('valorInicialCompra') or item.get('valorFinalCompra'))
                 total += val
@@ -201,45 +220,46 @@ with aba2:
             
             df = pd.DataFrame(tabela)
             
-            # --- O GRANDE MOMENTO: PROCESSAMENTO IA ---
+            # --- PROCESSAMENTO IA ---
             if usar_ia:
-                st.info("🧠 A IA está analisando os contratos de maior valor (Aguarde)...")
-                
-                # Ordena e pega os top 5
-                df = df.sort_values("Valor", ascending=False)
-                top_idx = df.head(5).index 
-                
-                bar_ia = st.progress(0, text="Iniciando Auditoria IA...")
-                
-                for i, idx in enumerate(top_idx):
-                    # 1. Checa CNPJ (Governo)
-                    cnpj_alvo = df.at[idx, "CNPJ"]
-                    if cnpj_alvo:
-                        df.at[idx, "CNPJ Status"] = checar_antecedentes(cnpj_alvo)
+                if not GEMINI_KEY:
+                    st.error("❌ ERRO: Chave da IA não configurada no arquivo .env")
+                else:
+                    st.info("🧠 A IA está analisando os 5 maiores contratos...")
                     
-                    # 2. Análise IA (Gemini)
-                    texto_contrato = df.at[idx, "Objeto"]
-                    parecer = analisar_contrato_ia(texto_contrato)
-                    df.at[idx, "Parecer IA"] = parecer
+                    df = df.sort_values("Valor", ascending=False)
+                    top_idx = df.head(5).index 
                     
-                    # Atualiza barra
-                    progresso = int((i + 1) / len(top_idx) * 100)
-                    bar_ia.progress(progresso, text=f"Analisando contrato {i+1}/{len(top_idx)}...")
-                    time.sleep(1) # Delay de segurança para a API
-                
-                bar_ia.empty()
+                    bar_ia = st.progress(0, text="Iniciando Auditoria IA...")
+                    
+                    for i, idx in enumerate(top_idx):
+                        # 1. CNPJ
+                        cnpj_alvo = df.at[idx, "CNPJ"]
+                        if cnpj_alvo:
+                            df.at[idx, "CNPJ Status"] = checar_antecedentes(cnpj_alvo)
+                        
+                        # 2. IA
+                        texto = df.at[idx, "Objeto"]
+                        parecer = analisar_contrato_ia(texto)
+                        df.at[idx, "Parecer IA"] = parecer
+                        
+                        # Progresso
+                        bar_ia.progress(int((i+1)/len(top_idx)*100), text=f"Analisando: {texto[:40]}...")
+                        time.sleep(1) 
+                    
+                    bar_ia.empty()
 
-            # Exibição Final
+            # Exibição
             c1, c2 = st.columns(2)
             c1.metric("Total Analisado", f"R$ {total:,.2f}")
             c2.metric("Contratos Encontrados", len(df))
             
-            # Cores Condicionais
             def cor_parecer(val):
                 val = str(val).upper()
                 if "ALTO" in val: return 'background-color: #ffcccc; color: #cc0000; font-weight: bold'
                 if "BAIXO" in val: return 'color: green; font-weight: bold'
                 if "MÉDIO" in val: return 'color: orange; font-weight: bold'
+                if "ERRO" in val: return 'background-color: #eeeeee; color: #666666;'
                 return ''
                 
             def cor_cnpj(val):
