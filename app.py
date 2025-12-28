@@ -6,38 +6,27 @@ import os
 from dotenv import load_dotenv
 import google.generativeai as genai
 
-# --- CONFIGURAÇÃO INICIAL ---
-st.set_page_config(page_title="GovAudit Pro + IA", page_icon="⚖️", layout="wide")
+# --- CONFIGURAÇÃO ---
+st.set_page_config(page_title="GovAudit Pro", page_icon="⚖️", layout="wide")
 load_dotenv()
 
+# --- CHAVES (COM DEBUG) ---
 PORTAL_KEY = os.getenv("PORTAL_KEY")
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 
 if GEMINI_KEY:
-    try:
-        genai.configure(api_key=GEMINI_KEY)
-    except:
-        pass
+    genai.configure(api_key=GEMINI_KEY)
 
-# --- CSS (Visual Limpo) ---
+# --- CSS ---
 st.markdown("""
     <style>
-        .block-container {padding-top: 1.5rem;}
-        div[data-testid="stMetricValue"] {font-size: 1.6rem;}
-        .stButton>button {width: 100%; margin-top: 29px;}
+        .block-container {padding-top: 1rem;}
+        div[data-testid="stMetricValue"] {font-size: 1.5rem;}
+        .stButton>button {width: 100%; margin-top: 28px;}
     </style>
 """, unsafe_allow_html=True)
 
-# --- DADOS ---
-ORGAOS_SIAFI = {
-    "Secretaria-Geral Presidência (Planalto)": "20101",
-    "Ministério da Saúde": "36000",
-    "Ministério da Educação": "26000",
-    "Polícia Federal": "30108",
-    "Comando do Exército": "52121"
-}
-
-# --- FUNÇÕES ÚTEIS ---
+# --- FUNÇÕES BÁSICAS ---
 def get_headers():
     return {"chave-api-dados": PORTAL_KEY, "Accept": "application/json"}
 
@@ -48,98 +37,92 @@ def safe_float(valor):
     try: return float(valor)
     except: return 0.0
 
-# --- 1. BUSCA NOME (DUPLA CHECAGEM) ---
-def buscar_nome_empresa(cnpj):
-    cnpj_limpo = limpar_string(cnpj)
-    # Tentativa 1: BrasilAPI
-    try:
-        r = requests.get(f"https://brasilapi.com.br/api/cnpj/v1/{cnpj_limpo}", timeout=3)
-        if r.status_code == 200:
-            return r.json().get('razao_social')
-    except: pass
-    
-    # Tentativa 2: MinhaReceita (Fallback)
-    try:
-        r = requests.get(f"https://minhareceita.org/{cnpj_limpo}", timeout=3)
-        if r.status_code == 200:
-            return r.json().get('razao_social')
-    except: pass
-    
-    return "Nome Indisponível (Erro na API Pública)"
-
-# --- 2. AUDITORIA CNPJ (RIGOROSA) ---
-# Só marca erro se o CNPJ sancionado for IDÊNTICO ao buscado
+# --- AUDITORIA CNPJ (MODO RAIZ - PEGA TUDO) ---
 @st.cache_data(ttl=3600)
 def auditar_cnpj_gov(cnpj_alvo):
     resultados = [] 
     cnpj_limpo = limpar_string(cnpj_alvo)
+    raiz_alvo = cnpj_limpo[:8] # Pega os 8 primeiros dígitos (Matriz)
     
+    # Se não tiver CNPJ válido, retorna vazio
+    if len(raiz_alvo) < 8: return []
+
     bases = {
-        "acordos-leniencia": "Leniência (Corrupção)", 
+        "acordos-leniencia": "Leniência", 
         "ceis": "Inidôneos (CEIS)", 
         "cnep": "Punidos (CNEP)"
     }
     
     for endpoint, label in bases.items():
         try:
+            # Busca pela raiz para garantir que pega tudo
             url = f"https://api.portaldatransparencia.gov.br/api-de-dados/{endpoint}"
             params = {"cnpjSancionado": cnpj_limpo, "pagina": 1}
             r = requests.get(url, params=params, headers=get_headers(), timeout=5)
             
             if r.status_code == 200:
                 itens = r.json()
+                # Se a API devolveu algo, verificamos se bate a raiz
                 for item in itens:
-                    # Verifica se o CNPJ retornado é REALMENTE o que buscamos
-                    # A API as vezes retorna "raiz" parecida. Filtramos aqui.
-                    cnpj_retornado = ""
+                    # Tenta achar o CNPJ na resposta
+                    cnpj_resp = ""
                     try:
-                        cnpj_retornado = item.get('sancionado', {}).get('codigoFormatado') or \
-                                       item.get('pessoa', {}).get('cnpjFormatado')
+                        cnpj_resp = item.get('sancionado', {}).get('codigoFormatado') or \
+                                    item.get('pessoa', {}).get('cnpjFormatado') or ""
                     except: pass
                     
-                    if limpar_string(cnpj_retornado) == cnpj_limpo:
-                        motivo = item.get('motivo') or "Sanção Ativa"
+                    # Se a raiz bater, é flag!
+                    if limpar_string(cnpj_resp)[:8] == raiz_alvo:
+                        motivo = item.get('motivo') or "Sanção Vigente na Base de Dados"
                         resultados.append({"origem": label, "motivo": motivo})
-        except:
-            pass 
+                        # Paramos no primeiro erro daquela base para não poluir
+                        break 
+        except Exception as e:
+            # Se der erro de conexão, ignora
+            pass
             
     return resultados
 
-# --- 3. IA GEMINI (TRY/EXCEPT ROBUSTO) ---
+# --- IA GEMINI (DEBUG ERROR MODE) ---
 def analisar_contrato_ia(objeto_texto):
     if not GEMINI_KEY: return "⚠️ S/ Chave"
     if not objeto_texto: return "⚪ Vazio"
     
     prompt = f"""
-    Analise o objeto do contrato: "{objeto_texto}"
-    Responda APENAS: 'ALTO RISCO', 'MÉDIO RISCO' ou 'BAIXO RISCO'.
+    Analise APENAS RISCOS JURÍDICOS E FINANCEIROS do objeto: "{objeto_texto}"
+    Responda EXATAMENTE uma das opções: 'ALTO RISCO', 'MÉDIO RISCO' ou 'BAIXO RISCO'.
     """
     
-    # Tenta Flash depois Pro
-    modelos = ['gemini-1.5-flash', 'gemini-pro']
+    # Tenta modelos diferentes
+    modelos = ['gemini-1.5-flash', 'gemini-pro', 'gemini-1.0-pro']
     
-    for nome_modelo in modelos:
+    erro_msg = ""
+    for modelo in modelos:
         try:
-            model = genai.GenerativeModel(nome_modelo)
+            model = genai.GenerativeModel(modelo)
             response = model.generate_content(prompt)
             return response.text.strip()
-        except:
+        except Exception as e:
+            erro_msg = str(e)
             continue
-            
-    return "IA Indisponível"
+    
+    # Se falhar, mostra o erro real
+    if "429" in erro_msg: return "Erro: Cota Excedida"
+    if "403" in erro_msg: return "Erro: Chave Inválida"
+    if "404" in erro_msg: return "Erro: Modelo 404 (Pip)"
+    return "Erro IA"
 
-# --- 4. BUSCA CONTRATOS ---
+# --- BUSCA CONTRATOS ---
 def buscar_contratos(codigo_orgao):
     lista = []
     dt_fim = datetime.now()
     dt_ini = dt_fim - timedelta(days=730)
     
-    placeholder = st.empty()
-    bar = placeholder.progress(0, text="Conectando ao Portal...")
+    # Feedback visual
+    status = st.empty()
+    status.text("Conectando API...")
     
-    # Limita a 2 páginas para ser mais rápido e dar menos erro
-    for i, pag in enumerate(range(1, 3)):
-        bar.progress((i+1)*50, text=f"Lendo Portal da Transparência (Pág {pag})...")
+    for pag in range(1, 3): # 2 páginas para ser rápido
         try:
             params = {
                 "dataInicial": dt_ini.strftime("%d/%m/%Y"), 
@@ -155,110 +138,127 @@ def buscar_contratos(codigo_orgao):
                 lista.extend(d)
             else: break
         except: break
-    placeholder.empty()
+    status.empty()
     return lista
 
-# --- INTERFACE ---
-st.title("🛡️ Auditoria Gov Federal + IA (Estável)")
-st.markdown("---")
+# --- INTERFACE PRINCIPAL ---
+st.title("🛡️ Auditoria Gov Federal (V51 Debug)")
 
-tab1, tab2 = st.tabs(["🔎 Auditoria CNPJ", "📊 Painel de Contratos"])
+# Menu lateral simplificado
+with st.sidebar:
+    st.header("Configurações")
+    st.info(f"🔑 Portal Key: {'OK' if PORTAL_KEY else 'Ausente'}")
+    st.info(f"🤖 Gemini Key: {'OK' if GEMINI_KEY else 'Ausente'}")
+    orgao_selecionado = st.selectbox("Órgão", [
+        "20101 - Presidência (Planalto)",
+        "36000 - Min. Saúde",
+        "26000 - Min. Educação",
+        "30108 - Polícia Federal",
+        "52121 - Exército"
+    ])
+    cod_orgao = orgao_selecionado.split(" - ")[0]
 
-# --- ABA 1 ---
-with tab1:
-    st.header("Checagem de Fornecedor")
+tab_cnpj, tab_contratos = st.tabs(["🕵️ Checagem CNPJ", "💰 Contratos e IA"])
+
+# --- ABA 1: CNPJ ---
+with tab_cnpj:
+    st.subheader("Auditoria de Fornecedor")
     c1, c2 = st.columns([3, 1])
-    cnpj_input = c1.text_input("CNPJ:", "05.144.757/0001-72")
-    if c2.button("Verificar", type="primary"):
-        
-        # 1. Nome
-        nome = buscar_nome_empresa(cnpj_input)
-        if "Indisponível" in nome:
-            st.warning(f"⚠️ {nome} (Mas a auditoria foi feita)")
-        else:
-            st.info(f"🏢 **Empresa:** {nome}")
-            
-        # 2. Sanções
-        st.write("🕵️ Cruzando dados com listas de punições...")
-        sancoes = auditar_cnpj_gov(cnpj_input)
-        
-        st.divider()
-        if sancoes:
-            st.error(f"🚨 **ALERTA: {len(sancoes)} RESTRIÇÃO(ÕES) ENCONTRADA(S)**")
-            for s in sancoes:
-                st.write(f"❌ **{s['origem']}**: {s['motivo']}")
-        else:
-            st.success("✅ **NADA CONSTA** - Fornecedor sem sanções ativas.")
-
-# --- ABA 2 ---
-with tab2:
-    st.header("Monitoramento de Contratos")
-    col_org, col_ia = st.columns([3, 1])
-    orgao = col_org.selectbox("Órgão:", list(ORGAOS_SIAFI.keys()))
-    usa_ia = col_ia.toggle("IA Analisa Riscos", value=True)
+    cnpj_digitado = c1.text_input("CNPJ Alvo", value="05.144.757/0001-72") # Default Novonor
     
-    if st.button("Carregar Contratos"):
-        dados = buscar_contratos(ORGAOS_SIAFI[orgao])
+    if c2.button("Auditar CNPJ"):
+        st.write("---")
+        
+        # 1. Nome (BrasilAPI)
+        with st.spinner("Buscando Razão Social..."):
+            nome = "Não identificado"
+            try:
+                r = requests.get(f"https://brasilapi.com.br/api/cnpj/v1/{limpar_string(cnpj_digitado)}", timeout=4)
+                if r.status_code == 200:
+                    nome = r.json().get('razao_social', nome)
+            except: pass
+            st.success(f"🏢 **Empresa:** {nome}")
+
+        # 2. Sanções (Portal)
+        with st.spinner("Verificando Sanções (CEIS/CNEP/Leniência)..."):
+            sancoes = auditar_cnpj_gov(cnpj_digitado)
+            
+            if sancoes:
+                st.error(f"🚨 **ALERTA MÁXIMO:** {len(sancoes)} Restrições Encontradas!")
+                for s in sancoes:
+                    st.write(f"❌ **{s['origem']}:** {s['motivo']}")
+            else:
+                st.success("✅ **Nada Consta** (Nenhuma sanção ativa encontrada para este CNPJ/Raiz).")
+
+# --- ABA 2: CONTRATOS ---
+with tab_contratos:
+    st.subheader(f"Contratos: {orgao_selecionado}")
+    
+    col_btn, col_check = st.columns([1, 4])
+    rodar = col_btn.button("🔎 Buscar Dados")
+    usar_ia = col_check.checkbox("Ativar Análise IA", value=True)
+
+    if rodar:
+        dados = buscar_contratos(cod_orgao)
         
         if dados:
-            # Processa dados iniciais
-            df_list = []
+            # Processamento
+            lista_final = []
             for item in dados:
-                df_list.append({
+                lista_final.append({
                     "Valor": safe_float(item.get('valorInicialCompra')),
-                    "Objeto": item.get('objeto', 'Objeto não informado'),
+                    "Objeto": item.get('objeto', 'N/A'),
                     "CNPJ": item.get('fornecedor', {}).get('cnpjFormatado', ''),
-                    "Risco IA": "...",
-                    "Status CNPJ": "⚪"
+                    "IA": "...",
+                    "Status": "⚪"
                 })
             
-            # Ordena e pega Top 10
-            df = pd.DataFrame(df_list).sort_values("Valor", ascending=False).head(10)
+            # DataFrame Top 8
+            df = pd.DataFrame(lista_final).sort_values("Valor", ascending=False).head(8)
             
-            # Loop de Análise (IA + CNPJ)
-            if usa_ia:
-                bar_ia = st.progress(0, text="IA analisando contratos...")
+            # IA e Check de CNPJ na tabela
+            if usar_ia:
+                bar = st.progress(0, text="Processando IA e Sanções...")
                 for i, (idx, row) in enumerate(df.iterrows()):
-                    # CNPJ
+                    # Checa CNPJ da linha
                     if row['CNPJ']:
-                        # Reusa a função rigorosa
-                        res = auditar_cnpj_gov(row['CNPJ'])
-                        df.at[idx, "Status CNPJ"] = "🔴 ALERTA" if res else "🟢 OK"
+                        sancao = auditar_cnpj_gov(row['CNPJ'])
+                        df.at[idx, "Status"] = "🔴 ALERTA" if sancao else "✅ OK"
                     
-                    # IA
-                    df.at[idx, "Risco IA"] = analisar_contrato_ia(row['Objeto'])
+                    # Chama IA
+                    df.at[idx, "IA"] = analisar_contrato_ia(row['Objeto'])
                     
-                    # Atualiza barra seguramente
-                    bar_ia.progress((i+1)/len(df))
-                bar_ia.empty()
-            
-            # --- MÉTRICAS (KPIs) ---
-            m1, m2, m3 = st.columns(3)
-            val_total = df['Valor'].sum()
-            qtd_risco = df[df['Risco IA'].str.contains("ALTO", na=False)].shape[0]
-            
-            m1.metric("Valor Total (Amostra)", f"R$ {val_total:,.2f}")
-            m2.metric("Contratos", len(df))
-            m3.metric("Riscos Altos (IA)", qtd_risco, delta_color="inverse")
-            
-            st.divider()
+                    bar.progress((i+1)/len(df))
+                bar.empty()
 
-            # --- TABELA FINAL ---
-            def color_ia(v):
-                if "ALTO" in str(v): return 'color: red; font-weight: bold; background-color: #ffe6e6'
-                if "BAIXO" in str(v): return 'color: green; font-weight: bold'
+            # --- MÉTRICAS ---
+            c_val, c_qtd, c_risk = st.columns(3)
+            c_val.metric("Valor Total", f"R$ {df['Valor'].sum():,.2f}")
+            c_qtd.metric("Contratos", len(df))
+            
+            # Conta riscos (ignora erros)
+            riscos = df[df['IA'].str.contains("ALTO", na=False)].shape[0]
+            c_risk.metric("Riscos Altos", riscos, delta_color="inverse")
+
+            st.write("---")
+            
+            # Cores
+            def highlight_risk(val):
+                if "ALTO" in str(val): return 'color: red; font-weight: bold'
+                if "BAIXO" in str(val): return 'color: green'
+                if "Erro" in str(val): return 'background-color: yellow; color: black'
                 return ''
-                
-            def color_cnpj(v):
-                if "ALERTA" in str(v): return 'color: red; font-weight: bold'
+            
+            def highlight_status(val):
+                if "ALERTA" in str(val): return 'color: red; font-weight: bold'
                 return 'color: green'
 
             st.dataframe(
-                df.style.applymap(color_ia, subset=['Risco IA'])
-                        .applymap(color_cnpj, subset=['Status CNPJ'])
+                df.style.applymap(highlight_risk, subset=['IA'])
+                        .applymap(highlight_status, subset=['Status'])
                         .format({"Valor": "R$ {:,.2f}"}),
                 use_container_width=True
             )
             
         else:
-            st.warning("Nenhum contrato recente encontrado para este órgão.")
+            st.warning("Nenhum contrato encontrado ou erro na API do Portal.")
