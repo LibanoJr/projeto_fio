@@ -108,7 +108,7 @@ def analisar_objeto_ia(objeto_texto):
     try:
         # TENTATIVA DUPLA: Tenta o modelo novo, se falhar, tenta o antigo
         try:
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            model = genai.GenerativeModel('gemini-2.5-flash')
             response = model.generate_content(f"Analise e retorne APENAS 'ALTO', 'MÉDIO' ou 'BAIXO' risco. Objeto: '{objeto_texto}'")
             return response.text.strip().upper()
         except:
