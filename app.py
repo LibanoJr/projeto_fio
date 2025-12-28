@@ -4,174 +4,121 @@ import pandas as pd
 from datetime import datetime, timedelta
 
 # --- CONFIGURAÇÃO ---
-st.set_page_config(page_title="Auditoria Gov", page_icon="⚖️", layout="wide")
-
+st.set_page_config(page_title="Auditoria Final", page_icon="🚨", layout="wide")
 PORTAL_KEY = "d03ede6b6072b78e6df678b6800d4ba1"
 
-# Adicionei a CGU que costuma ter dados limpos
-ORGAOS_SIAFI = {
-    "Ministério da Saúde": "36000",
-    "Ministério da Educação": "26000",
-    "DNIT (Transportes)": "39252",
-    "Comando do Exército": "52121",
-    "Polícia Federal": "30108",
-    "Controladoria-Geral (CGU)": "20000"
-}
-
-# --- FUNÇÕES TÉCNICAS ---
+# --- FUNÇÕES ---
 def get_headers():
     return {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
         "chave-api-dados": PORTAL_KEY,
         "Accept": "application/json"
     }
 
 def limpar_cnpj(cnpj):
-    if not cnpj: return ""
     return "".join([n for n in str(cnpj) if n.isdigit()])
 
-# CORREÇÃO CRÍTICA PARA VALORES MONETÁRIOS
-def converter_dinheiro(valor):
-    if valor is None: return 0.0
-    try:
-        # Se já for número, retorna
-        if isinstance(valor, (int, float)):
-            return float(valor)
-        
-        # Se for string "1.500,00"
-        v_str = str(valor).strip()
-        if "," in v_str:
-            v_str = v_str.replace(".", "").replace(",", ".")
-        return float(v_str)
-    except:
-        return 0.0
-
-def auditar_firewall(cnpj_alvo):
-    resultados_reais = []
-    cnpj_limpo_alvo = limpar_cnpj(cnpj_alvo)
+# --- AUDITORIA MODO BRUTO (SEM FILTROS) ---
+def auditar_sem_barreiras(cnpj):
+    resultados = []
+    cnpj_limpo = limpar_cnpj(cnpj)
     
-    bases = ["ceis", "cnep", "acordos-leniencia"]
+    # Bases Críticas
+    bases = {
+        "acordos-leniencia": "ACORDO LENIÊNCIA",
+        "ceis": "INIDÔNEOS (CEIS)",
+        "cnep": "PUNIDOS (CNEP)"
+    }
     
-    for base in bases:
-        url = f"https://api.portaldatransparencia.gov.br/api-de-dados/{base}"
-        params = {"cnpjSancionado": cnpj_limpo_alvo, "pagina": 1}
-        
+    for endpoint, nome_base in bases.items():
         try:
-            resp = requests.get(url, params=params, headers=get_headers(), timeout=10)
-            if resp.status_code == 200:
-                lista_suja = resp.json()
-                for item in lista_suja:
-                    # Tenta pegar CNPJ em vários lugares
-                    cnpj_item = ""
-                    try: cnpj_item = item.get('sancionado', {}).get('codigoFormatado')
-                    except: pass
-                    if not cnpj_item:
-                        try: cnpj_item = item.get('pessoa', {}).get('cnpjFormatado')
-                        except: pass
-                    
-                    # Validação Raiz
-                    if limpar_cnpj(cnpj_item).startswith(cnpj_limpo_alvo[:8]):
-                        item['_origem_formatada'] = base.upper().replace("-", " ")
-                        resultados_reais.append(item)
-        except: pass
+            url = f"https://api.portaldatransparencia.gov.br/api-de-dados/{endpoint}"
+            # Solicita à API. Se ela devolver, nós mostramos.
+            params = {"cnpjSancionado": cnpj_limpo, "pagina": 1}
             
-    return resultados_reais
-
-def buscar_contratos_loop(codigo_orgao):
-    todos_contratos = []
-    dt_fim = datetime.now()
-    dt_ini = dt_fim - timedelta(days=365)
-    
-    progress = st.progress(0)
-    for pag in range(1, 4): # Pega 3 páginas (aprox 45-50 itens)
-        params = {
-            "dataInicial": dt_ini.strftime("%d/%m/%Y"),
-            "dataFinal": dt_fim.strftime("%d/%m/%Y"),
-            "codigoOrgao": codigo_orgao,
-            "pagina": pag
-        }
-        try:
-            r = requests.get("https://api.portaldatransparencia.gov.br/api-de-dados/contratos", 
-                           params=params, headers=get_headers(), timeout=15)
-            if r.status_code == 200:
-                d = r.json()
-                if not d: break
-                todos_contratos.extend(d)
-                progress.progress(pag * 33)
-            else: break
-        except: break
-    
-    progress.empty()
-    return todos_contratos
+            resp = requests.get(url, params=params, headers=get_headers(), timeout=10)
+            
+            if resp.status_code == 200:
+                dados = resp.json()
+                # Se vier lista vazia [], ignora
+                if dados and isinstance(dados, list):
+                    for item in dados:
+                        item['_base_origem'] = nome_base
+                        resultados.append(item)
+        except:
+            pass
+            
+    return resultados
 
 # --- INTERFACE ---
-st.title("⚖️ Auditoria Gov Federal (V35 Final)")
+st.title("🚨 Auditoria V36 (Modo Bruto)")
 
-aba1, aba2 = st.tabs(["🕵️ Auditoria CNPJ", "📊 Monitor de Contratos"])
+aba1, aba2 = st.tabs(["🔥 Auditoria CNPJ", "💰 Debug Contratos"])
 
 # --- ABA 1 ---
 with aba1:
-    st.header("Auditoria de Compliance")
-    col1, col2 = st.columns([3, 1])
-    cnpj_input = col1.text_input("CNPJ:", value="05.144.757/0001-72") # Já deixei a ODEBRECHT de padrão
+    st.write("Dica: Teste **05.144.757/0001-72** (Odebrecht). Se aparecer algo, o sistema funciona.")
+    cnpj_input = st.text_input("CNPJ Alvo:", value="05.144.757/0001-72")
     
-    if col2.button("Verificar", type="primary"):
-        st.write("") 
-        
-        # 1. Identificação
+    if st.button("RASTREAR (SEM FILTROS)"):
+        # 1. Tenta pegar o nome (Opcional, se falhar não trava)
         try:
-            r = requests.get(f"https://minhareceita.org/{limpar_cnpj(cnpj_input)}", timeout=3)
-            nome = r.json().get('razao_social', 'Empresa não identificada')
-            st.info(f"Analisando: **{nome}**")
-        except: pass
+            r = requests.get(f"https://minhareceita.org/{limpar_cnpj(cnpj_input)}", timeout=2)
+            if r.status_code == 200:
+                st.info(f"Receita Federal: **{r.json().get('razao_social')}**")
+        except:
+            st.warning("MinhaReceita instável (Nome ignorado)")
 
-        # 2. Varredura
-        sancoes = auditar_firewall(cnpj_input)
+        # 2. Busca Bruta
+        sancoes = auditar_sem_barreiras(cnpj_input)
         
         st.divider()
         if sancoes:
-            st.error(f"🚨 **ALERTA VERMELHO: {len(sancoes)} OCORRÊNCIAS**")
+            st.error(f"⚠️ **A API RETORNOU {len(sancoes)} REGISTROS**")
+            st.write("Confira abaixo se pertencem à empresa (Nomes e Datas):")
+            
             for s in sancoes:
-                with st.expander(f"⚠️ {s['_origem_formatada']}"):
-                    st.write(f"**Motivo:** {s.get('motivo') or s.get('situacaoAcordo')}")
-                    st.write(f"**Órgão:** {s.get('orgaoSancionador', {}).get('nome')}")
+                with st.expander(f"{s['_base_origem']} (Clique para ver detalhes)"):
+                    # Tenta mostrar o máximo de campos possíveis sem quebrar
+                    st.json(s) 
         else:
-            st.success("✅ **NADA CONSTA** - CNPJ Limpo")
+            st.success("✅ O Governo retornou lista vazia (Nada Consta Absoluto)")
 
 # --- ABA 2 ---
 with aba2:
-    st.header("Contratos (Correção de Valores)")
-    orgao = st.selectbox("Órgão", list(ORGAOS_SIAFI.keys()))
+    st.header("Descobrir Campos de Valor")
+    st.info("Vamos ver o JSON cru para descobrir qual o nome do campo 'Valor'.")
     
-    if st.button("Carregar Contratos"):
-        dados = buscar_contratos_loop(ORGAOS_SIAFI[orgao])
+    # Ministério da Saúde (Sempre tem dados)
+    if st.button("🔍 BAIXAR JSON PURO (Saúde)"):
+        url = "https://api.portaldatransparencia.gov.br/api-de-dados/contratos"
+        params = {
+            "dataInicial": "01/06/2024", # Periodo curto pra ser rapido
+            "dataFinal": "30/06/2024",
+            "codigoOrgao": "36000", # Saúde
+            "pagina": 1
+        }
         
-        if dados:
-            # --- DEBUG PARA VOCÊ VER ---
-            with st.expander("🛠️ Debug Técnico (Ver dados brutos do 1º item)"):
-                st.json(dados[0])
+        try:
+            r = requests.get(url, params=params, headers=get_headers())
+            data = r.json()
             
-            lista = []
-            total = 0.0
-            
-            for d in dados:
-                # Tenta pegar o valor em campos diferentes
-                val_bruto = d.get('valorInicial') or d.get('valorGlobal') or d.get('valorContratado')
-                valor_real = converter_dinheiro(val_bruto)
+            if data and len(data) > 0:
+                primeiro_item = data[0]
+                st.success("✅ Dados recebidos! Veja abaixo as chaves disponíveis:")
                 
-                total += valor_real
-                lista.append({
-                    "Data": d.get('dataAssinatura'),
-                    "Fornecedor": d.get('fornecedor', {}).get('nome', 'N/A')[:40],
-                    "Valor": valor_real
-                })
-            
-            df = pd.DataFrame(lista)
-            
-            c1, c2 = st.columns(2)
-            c1.metric("Total Gasto", f"R$ {total:,.2f}")
-            c2.metric("Qtd. Contratos", len(df))
-            
-            st.dataframe(df.sort_values("Data", ascending=False).style.format({"Valor": "R$ {:,.2f}"}), use_container_width=True)
-        else:
-            st.warning("Nenhum contrato retornado para este órgão.")
+                # MOSTRA AS CHAVES NA TELA
+                keys = list(primeiro_item.keys())
+                st.write(f"**Campos disponíveis:** {keys}")
+                
+                # MOSTRA O JSON INTEIRO
+                st.text("JSON do Primeiro Contrato:")
+                st.json(primeiro_item)
+                
+                # TENTA TABELA SIMPLES
+                df = pd.DataFrame(data)
+                st.dataframe(df)
+            else:
+                st.warning("Lista vazia retornada pela API.")
+                
+        except Exception as e:
+            st.error(f"Erro: {e}")
