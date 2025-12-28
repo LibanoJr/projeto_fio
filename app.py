@@ -2,23 +2,25 @@ import streamlit as st
 import requests
 import pandas as pd
 from datetime import datetime, timedelta
+import time
 
 # --- CONFIGURAÇÃO ---
 st.set_page_config(page_title="Auditoria Gov", page_icon="⚖️", layout="wide")
 
 PORTAL_KEY = "d03ede6b6072b78e6df678b6800d4ba1"
 
+# Adicionei órgãos que TEM que ter contrato (DNIT, INSS)
 ORGAOS_SIAFI = {
-    "Ministério da Saúde (MS)": "36000",
-    "Ministério da Educação (MEC)": "26000",
-    "Ministério da Justiça (MJ)": "30000",
-    "Presidência da República": "20000",
-    "Ministério da Economia": "17000",
+    "Ministério da Saúde": "36000",
+    "Ministério da Educação": "26000",
+    "DNIT (Transportes)": "39252",
+    "INSS": "33201",
+    "Polícia Federal": "30108",
     "Comando do Exército": "52121",
-    "Polícia Federal": "30108"
+    "Ministério da Justiça": "30000"
 }
 
-# --- FUNÇÕES ---
+# --- FUNÇÕES TÉCNICAS ---
 def get_headers():
     return {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
@@ -34,148 +36,165 @@ def safe_float(valor):
     try: return float(valor)
     except: return 0.0
 
-@st.cache_data(ttl=3600)
-def consultar_dados_cadastrais(cnpj):
-    try:
-        r = requests.get(f"https://minhareceita.org/{limpar_cnpj(cnpj)}", timeout=5)
-        if r.status_code == 200: return r.json()
-    except: pass
-    return None
-
-def auditar_completa(cnpj_alvo):
-    resultados = []
-    cnpj_limpo = limpar_cnpj(cnpj_alvo)
+# --- LÓGICA DO FIREWALL (AUDITORIA) ---
+def auditar_firewall(cnpj_alvo):
+    resultados_reais = []
+    cnpj_limpo_alvo = limpar_cnpj(cnpj_alvo)
     
-    # AGORA COM 3 BASES (Incluindo Acordos de Leniência)
-    bases = {
-        "ceis": "Cadastro de Inidôneos (CEIS)",
-        "cnep": "Cadastro de Punidos (CNEP)",
-        "acordos-leniencia": "Acordos de Leniência"
-    }
+    # Bases: CEIS, CNEP e Acordos de Leniência
+    bases = ["ceis", "cnep", "acordos-leniencia"]
     
-    for endpoint, nome_base in bases.items():
-        url = f"https://api.portaldatransparencia.gov.br/api-de-dados/{endpoint}"
-        params = {"cnpjSancionado": cnpj_limpo, "pagina": 1}
+    for base in bases:
+        url = f"https://api.portaldatransparencia.gov.br/api-de-dados/{base}"
+        params = {"cnpjSancionado": cnpj_limpo_alvo, "pagina": 1}
         
         try:
             resp = requests.get(url, params=params, headers=get_headers(), timeout=10)
             if resp.status_code == 200:
-                items = resp.json()
-                # Se devolveu lista vazia, ignora
-                if not items: continue
+                lista_suja = resp.json()
                 
-                # Validação Simplificada (Raiz do CNPJ)
-                # Se a API devolveu algo buscando pelo CNPJ exato, 99% de chance de ser real.
-                for item in items:
-                    item['_origem'] = nome_base
-                    resultados.append(item)
+                # O FIREWALL: Filtra item por item
+                for item in lista_suja:
+                    cnpj_item = ""
                     
+                    # Tenta achar onde o governo escondeu o CNPJ nesse registro
+                    try: cnpj_item = item.get('sancionado', {}).get('codigoFormatado')
+                    except: pass
+                    
+                    if not cnpj_item:
+                        try: cnpj_item = item.get('pessoa', {}).get('cnpjFormatado')
+                        except: pass
+
+                    # Só aceita se a RAIZ (8 primeiros dígitos) bater
+                    # Isso aceita filial (0001, 0002) mas bloqueia outras empresas
+                    cnpj_item_limpo = limpar_cnpj(cnpj_item)
+                    
+                    if cnpj_item_limpo.startswith(cnpj_limpo_alvo[:8]):
+                        item['_origem_formatada'] = base.upper().replace("-", " ")
+                        resultados_reais.append(item)
+                        
         except Exception as e:
-            print(f"Erro em {endpoint}: {e}")
+            pass
             
-    return resultados
+    return resultados_reais
+
+# --- LÓGICA DE PAGINAÇÃO (CONTRATOS) ---
+def buscar_contratos_loop(codigo_orgao):
+    todos_contratos = []
+    dt_fim = datetime.now()
+    dt_ini = dt_fim - timedelta(days=365) # 1 Ano
+    
+    # Loop forçado: Pega página 1, 2, 3 e 4 (aprox 60 contratos)
+    progress_bar = st.progress(0)
+    
+    for pag in range(1, 5):
+        params = {
+            "dataInicial": dt_ini.strftime("%d/%m/%Y"),
+            "dataFinal": dt_fim.strftime("%d/%m/%Y"),
+            "codigoOrgao": codigo_orgao,
+            "pagina": pag
+        }
+        try:
+            r = requests.get("https://api.portaldatransparencia.gov.br/api-de-dados/contratos", 
+                           params=params, headers=get_headers(), timeout=15)
+            if r.status_code == 200:
+                dados = r.json()
+                if not dados: break # Se vier vazio, para de tentar
+                todos_contratos.extend(dados)
+                progress_bar.progress(pag * 25)
+            else:
+                break
+        except:
+            break
+            
+    progress_bar.empty()
+    return todos_contratos
 
 # --- INTERFACE ---
-st.title("⚖️ Auditoria Gov Federal (V33 - Leniência + Max Contratos)")
+st.title("⚖️ Auditoria Gov Federal (Versão Final)")
 
-aba1, aba2 = st.tabs(["🕵️ Auditoria (Inclui Leniência)", "📊 Monitor (Max 100)"])
+aba1, aba2 = st.tabs(["🕵️ Auditoria CNPJ", "📊 Monitor de Contratos"])
 
-# --- ABA 1 ---
+# --- ABA 1: AUDITORIA ---
 with aba1:
-    st.header("Verificar Fornecedor")
-    st.info("ℹ️ Bases Varridas: CEIS (Inidôneos), CNEP (Punidos) e Acordos de Leniência.")
+    st.header("Compliance & Antecedentes")
+    st.info("ℹ️ Sistema com validação estrita de CNPJ (Anti-Falso Positivo).")
     
-    # Exemplo: MENDES JUNIOR
-    cnpj_input = st.text_input("CNPJ:", value="17.162.082/0001-73")
+    # Input
+    col_in, col_btn = st.columns([3, 1])
+    with col_in:
+        cnpj_input = st.text_input("Digite o CNPJ:", placeholder="00.000.000/0000-00")
+    with col_btn:
+        st.write("") # Espaço
+        st.write("") 
+        btn_auditar = st.button("🔍 Verificar", type="primary")
     
-    if st.button("Executar Varredura Completa", type="primary"):
-        with st.spinner("Consultando bases históricas..."):
-            
-            # Identificação
-            cad = consultar_dados_cadastrais(cnpj_input)
-            razao = cad.get('razao_social') if cad else "Empresa"
-            st.success(f"Analizando: **{razao}**")
-            
-            # Auditoria
-            sancoes = auditar_completa(cnpj_input)
-            
-            st.divider()
-            
-            if sancoes:
-                st.error(f"🚨 **ATENÇÃO: {len(sancoes)} REGISTROS ENCONTRADOS**")
-                
-                for s in sancoes:
-                    with st.expander(f"⚠️ {s['_origem']} - Ver Detalhes"):
-                        st.write(f"**Empresa:** {s.get('sancionado', {}).get('nome') or s.get('razaoSocial')}")
-                        st.write(f"**Órgão:** {s.get('orgaoSancionador', {}).get('nome')}")
-                        st.write(f"**Motivo/Situação:** {s.get('motivo') or s.get('situacaoAcordo')}")
-                        
-                        # Data do registro
-                        dt = s.get('dataPublicacao') or s.get('dataInicioAcordo')
-                        if dt: st.caption(f"Data do Registro: {dt}")
-            else:
-                st.success("✅ **Nada Consta** nas 3 bases federais.")
-                st.caption("A empresa não possui sanções ativas nem acordos de leniência vigentes.")
+    if btn_auditar and cnpj_input:
+        if len(limpar_cnpj(cnpj_input)) != 14:
+            st.warning("CNPJ parece incompleto.")
+        else:
+            with st.spinner("Confrontando bases (CEIS, CNEP, Leniência)..."):
+                # 1. Busca Nome (MinhaReceita)
+                try:
+                    r_rec = requests.get(f"https://minhareceita.org/{limpar_cnpj(cnpj_input)}", timeout=5)
+                    dados_rec = r_rec.json()
+                    razao = dados_rec.get('razao_social') or "Razão Social não encontrada"
+                    st.markdown(f"### 🏢 {razao}")
+                except:
+                    st.markdown("### 🏢 Empresa em análise")
 
-# --- ABA 2 ---
-with aba2:
-    st.header("Monitoramento de Contratos")
-    
-    c1, c2 = st.columns([2, 1])
-    with c1: orgao = st.selectbox("Selecione o Órgão", list(ORGAOS_SIAFI.keys()))
-    
-    dt_hoje = datetime.now()
-    dt_inicio = dt_hoje - timedelta(days=365)
-    
-    with c2: st.write("Últimos 12 meses (Max 100 itens)")
-    
-    if st.button("Buscar Contratos (Expandido)"):
-        cod = ORGAOS_SIAFI[orgao]
-        
-        # PARAMETRO QUANTIDADE=100 ADICIONADO
-        params = {
-            "dataInicial": dt_inicio.strftime("%d/%m/%Y"),
-            "dataFinal": dt_hoje.strftime("%d/%m/%Y"),
-            "codigoOrgao": cod,
-            "pagina": 1,
-            "quantidade": 100 
-        }
-        
-        with st.spinner(f"Baixando até 100 contratos do {orgao}..."):
-            try:
-                r = requests.get("https://api.portaldatransparencia.gov.br/api-de-dados/contratos", 
-                               params=params, headers=get_headers(), timeout=45)
+                # 2. Auditoria Firewall
+                sancoes = auditar_firewall(cnpj_input)
                 
-                # Tratamento de erro de órgão vazio
-                if r.status_code == 200:
-                    data = r.json()
-                    if data:
-                        lista = []
-                        total = 0.0
-                        for d in data:
-                            val = safe_float(d.get('valorInicial') or d.get('valorGlobal'))
-                            total += val
-                            lista.append({
-                                "Data": d.get('dataAssinatura'),
-                                "Fornecedor": d.get('fornecedor', {}).get('nome', 'N/A')[:50],
-                                "Valor": val
-                            })
-                        
-                        df = pd.DataFrame(lista)
-                        
-                        k1, k2 = st.columns(2)
-                        k1.metric("Total Gasto (Amostra)", f"R$ {total:,.2f}")
-                        k2.metric("Contratos Listados", len(df))
-                        
-                        if len(df) == 100:
-                            st.warning("⚠️ Limite de 100 contratos atingido (Padrão de segurança).")
-                        
-                        st.dataframe(df.sort_values("Data", ascending=False).style.format({"Valor": "R$ {:,.2f}"}), use_container_width=True)
-                    else:
-                        st.warning("⚠️ Nenhum contrato encontrado para este código SIAFI.")
-                        st.markdown(f"**Dica:** Órgãos como 'Presidência' ou 'Economia' usam códigos descentralizados (Ex: 17001, 17002). Tente 'Polícia Federal' ou 'Exército' para ver dados reais.")
-                else:
-                    st.error(f"Erro na API: {r.status_code}")
+                st.divider()
+                
+                if len(sancoes) > 0:
+                    st.error(f"🚨 **ALERTA: {len(sancoes)} RESTRIÇÕES ENCONTRADAS**")
+                    st.caption("Estes registros conferem exatamente com a raiz do CNPJ informado.")
                     
-            except Exception as e:
-                st.error(f"Erro: {e}")
+                    for s in sancoes:
+                        with st.expander(f"⚠️ {s['_origem_formatada']} - Ver Detalhes"):
+                            st.write(f"**Órgão:** {s.get('orgaoSancionador', {}).get('nome')}")
+                            st.write(f"**Motivo:** {s.get('motivo') or s.get('situacaoAcordo', 'Não informado')}")
+                            data_ref = s.get('dataPublicacao') or s.get('dataInicioAcordo')
+                            st.write(f"**Data:** {data_ref}")
+                else:
+                    st.success(f"✅ **NADA CONSTA**")
+                    st.write(f"Nenhum registro ativo encontrado para o CNPJ {cnpj_input} nas listas de sanções ou leniência.")
+
+# --- ABA 2: CONTRATOS ---
+with aba2:
+    st.header("Monitoramento de Contratos (Loop)")
+    
+    orgao_nome = st.selectbox("Selecione o Órgão", list(ORGAOS_SIAFI.keys()))
+    
+    if st.button("Buscar Contratos"):
+        cod = ORGAOS_SIAFI[orgao_nome]
+        
+        with st.spinner(f"Coletando páginas de contratos do {orgao_nome}..."):
+            raw_data = buscar_contratos_loop(cod)
+            
+            if raw_data:
+                lista_formatada = []
+                total = 0.0
+                
+                for d in raw_data:
+                    valor = safe_float(d.get('valorInicial') or d.get('valorGlobal'))
+                    total += valor
+                    lista_formatada.append({
+                        "Data Assinatura": d.get('dataAssinatura'),
+                        "Fornecedor": d.get('fornecedor', {}).get('nome', 'DESCONHECIDO')[:40],
+                        "Valor": valor
+                    })
+                
+                df = pd.DataFrame(lista_formatada)
+                
+                # Métricas
+                c1, c2 = st.columns(2)
+                c1.metric("Total Gasto (Recente)", f"R$ {total:,.2f}")
+                c2.metric("Contratos Analisados", len(df))
+                
+                st.dataframe(df.sort_values("Data Assinatura", ascending=False).style.format({"Valor": "R$ {:,.2f}"}), use_container_width=True)
+            else:
+                st.warning("⚠️ Nenhum contrato encontrado.")
+                st.markdown("**Diagnóstico:** O órgão selecionado não reportou contratos no último ano ou está com instabilidade momentânea.")
