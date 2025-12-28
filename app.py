@@ -14,17 +14,15 @@ load_dotenv()
 PORTAL_KEY = os.getenv("PORTAL_KEY")
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 
-# Configuração da IA
 if GEMINI_KEY:
     genai.configure(api_key=GEMINI_KEY)
 
-# --- CSS OTIMIZADO ---
+# --- CSS ---
 st.markdown("""
     <style>
         .block-container {padding-top: 1.5rem;}
-        #MainMenu {visibility: hidden;}
-        footer {visibility: hidden;}
-        .stButton>button {width: 100%; margin-top: 29px;} /* Alinha botão com input */
+        div[data-testid="stMetricValue"] {font-size: 1.8rem;}
+        .stButton>button {width: 100%; margin-top: 29px;}
     </style>
 """, unsafe_allow_html=True)
 
@@ -49,28 +47,42 @@ def safe_float(valor):
     try: return float(valor)
     except: return 0.0
 
-# --- AUDITORIA CNPJ ---
+# --- AUDITORIA CNPJ (CORRIGIDA) ---
 @st.cache_data(ttl=3600)
 def auditar_cnpj_gov(cnpj_alvo):
     resultados = [] 
     cnpj_limpo = limpar_string(cnpj_alvo)
-    raiz = cnpj_limpo[:8]
-    bases = {"acordos-leniencia": "Leniência", "ceis": "Inidôneos", "cnep": "Punidos"}
+    
+    # Bases a consultar
+    bases = {
+        "acordos-leniencia": "Leniência (Corrupção)", 
+        "ceis": "Inidôneos (CEIS)", 
+        "cnep": "Punidos (CNEP)"
+    }
     
     for endpoint, label in bases.items():
         try:
             url = f"https://api.portaldatransparencia.gov.br/api-de-dados/{endpoint}"
-            r = requests.get(url, params={"cnpjSancionado": cnpj_limpo, "pagina": 1}, headers=get_headers(), timeout=4)
-            if r.status_code == 200:
-                for item in r.json():
-                    c = item.get('sancionado', {}).get('codigoFormatado') or item.get('pessoa', {}).get('cnpjFormatado')
-                    if c and limpar_string(c)[:8] == raiz:
-                        item['_origem'] = label
-                        resultados.append(item)
-        except: pass
+            # Busca simples: se retornar lista não vazia, é flag
+            params = {"cnpjSancionado": cnpj_limpo, "pagina": 1}
+            r = requests.get(url, params=params, headers=get_headers(), timeout=5)
+            
+            if r.status_code == 200 and len(r.json()) > 0:
+                # Pega o primeiro motivo encontrado
+                item = r.json()[0]
+                motivo = "Sanção identificada na base de dados."
+                
+                # Tenta extrair detalhes dependendo da base
+                if 'motivo' in item: motivo = item['motivo']
+                elif 'sancionado' in item: motivo = "Registro ativo no cadastro de sanções."
+                
+                resultados.append({"_origem": label, "motivo": motivo})
+        except:
+            pass # Falha de conexão ignora, mas não quebra
+            
     return resultados
 
-# --- IA GEMINI (V48 - Retry Strategy) ---
+# --- IA GEMINI ---
 def analisar_contrato_ia(objeto_texto):
     if not GEMINI_KEY: return "⚠️ S/ Chave"
     
@@ -81,14 +93,12 @@ def analisar_contrato_ia(objeto_texto):
     """
     
     modelos = ['gemini-1.5-flash', 'gemini-pro']
-    
     for modelo in modelos:
         try:
             model = genai.GenerativeModel(modelo)
             response = model.generate_content(prompt)
             return response.text.strip()
         except: continue
-            
     return "Erro Conexão IA"
 
 # --- BUSCA CONTRATOS ---
@@ -100,6 +110,7 @@ def buscar_contratos(codigo_orgao):
     placeholder = st.empty()
     bar = placeholder.progress(0, text="Conectando ao Portal...")
     
+    # Baixa 3 páginas
     for i, pag in enumerate(range(1, 4)):
         bar.progress((i+1)*30, text=f"Baixando Contratos (Pág {pag})...")
         try:
@@ -121,7 +132,7 @@ def buscar_contratos(codigo_orgao):
     return lista
 
 # --- INTERFACE ---
-st.title("🛡️ Auditoria Gov Federal + IA (V48)")
+st.title("🛡️ Auditoria Gov Federal + IA (V49)")
 st.markdown("---")
 
 tab1, tab2 = st.tabs(["🔎 Auditoria CNPJ", "📊 Monitor de Contratos"])
@@ -132,35 +143,38 @@ with tab1:
     col1, col2 = st.columns([3, 1])
     
     with col1:
-        cnpj_input = st.text_input("CNPJ:", "05.144.757/0001-72")
+        cnpj_input = st.text_input("CNPJ:", "05.144.757/0001-72") # Default: Novonor
     with col2:
-        # Botão alinhado pelo CSS
         btn_check = st.button("Verificar Agora", type="primary")
 
     if btn_check:
         st.write("⏳ Consultando bases governamentais...")
         
-        # Nome da Empresa (Soft Fail)
-        nome_display = "Nome não obtido (API Externa Instável)"
+        # Busca Nome (BrasilAPI - Mais estável)
+        cnpj_numeros = limpar_string(cnpj_input)
+        nome_display = "Razão Social não identificada"
         try:
-            r = requests.get(f"https://minhareceita.org/{limpar_string(cnpj_input)}", timeout=3)
-            if r.status_code == 200:
-                nome_display = r.json().get('razao_social', nome_display)
-        except: pass
-        
-        st.info(f"🏢 **Fornecedor:** {nome_display}")
+            r_nome = requests.get(f"https://brasilapi.com.br/api/cnpj/v1/{cnpj_numeros}", timeout=5)
+            if r_nome.status_code == 200:
+                dados = r_nome.json()
+                nome_display = dados.get('razao_social', nome_display)
+                st.info(f"🏢 **Empresa:** {nome_display} ({dados.get('descricao_situacao_cadastral', '')})")
+            else:
+                st.warning("⚠️ Não foi possível obter o nome (API instável), mas a auditoria continua.")
+        except:
+            st.warning("⚠️ Erro de conexão ao buscar nome.")
 
-        # Sanções
+        # Busca Sanções
         sancoes = auditar_cnpj_gov(cnpj_input)
         st.divider()
         if sancoes:
-            st.error(f"🚨 **ALERTA VERMELHO: {len(sancoes)} RESTRIÇÕES**")
+            st.error(f"🚨 **ALERTA VERMELHO: {len(sancoes)} REGISTROS ENCONTRADOS**")
             for s in sancoes:
                 st.write(f"❌ **{s['_origem']}**: {s.get('motivo', 'Sem detalhes')}")
         else:
             st.success("✅ **FICHA LIMPA:** Nenhuma sanção ativa encontrada no Governo Federal.")
 
-# TAB 2: CONTRATOS + IA
+# TAB 2: CONTRATOS
 with tab2:
     st.header("Monitoramento de Gastos & IA")
     c_org, c_ia = st.columns([3, 1])
@@ -181,36 +195,41 @@ with tab2:
                     "Status CNPJ": "⚪"
                 })
             
-            # Pega Top 8 maiores valores
             df = pd.DataFrame(rows).sort_values("Valor", ascending=False).head(8)
             
-            # --- CORREÇÃO DO CRASH DA BARRA DE PROGRESSO ---
+            # --- IA LOOP ---
             if ativar_ia:
                 prog_bar = st.progress(0, text="IA Analisando contratos...")
-                
-                # Usamos enumerate para garantir contador de 0 a N correto
                 for i, (index, row) in enumerate(df.iterrows()):
-                    
-                    # 1. Checa CNPJ
+                    # CNPJ Check
                     if row["CNPJ"]:
                         is_bad = auditar_cnpj_gov(row["CNPJ"])
                         df.at[index, "Status CNPJ"] = "🚨 ALERTA" if is_bad else "✅ OK"
                     
-                    # 2. Checa IA
+                    # IA Check
                     df.at[index, "Risco IA"] = analisar_contrato_ia(row["Objeto"])
                     
-                    # Atualiza barra (Matemática segura: i+1 dividido pelo total)
                     prog_bar.progress((i + 1) / len(df))
-                    
                 prog_bar.empty()
             
-            # Estilos
+            # --- MÉTRICAS (KPIs) VOLTARAM AQUI ---
+            total_gasto = df["Valor"].sum()
+            qtd_contratos = len(df)
+            riscos_altos = df[df["Risco IA"].str.contains("ALTO", na=False)].shape[0]
+
+            m1, m2, m3 = st.columns(3)
+            m1.metric("💰 Volume Analisado", f"R$ {total_gasto:,.2f}")
+            m2.metric("📄 Contratos", f"{qtd_contratos}")
+            m3.metric("⚠️ Riscos Altos (IA)", f"{riscos_altos}", delta_color="inverse")
+            
+            st.divider()
+
+            # Tabela
             def style_risk(v):
                 if "ALTO" in str(v): return 'color: red; font-weight: bold; background-color: #ffe6e6'
                 if "BAIXO" in str(v): return 'color: green; font-weight: bold'
-                if "Erro" in str(v): return 'color: orange'
                 return ''
-                
+            
             def style_cnpj(v):
                 if "ALERTA" in str(v): return 'color: red; font-weight: bold'
                 return 'color: green'
@@ -222,4 +241,4 @@ with tab2:
                 use_container_width=True
             )
         else:
-            st.warning("Nenhum contrato encontrado neste período.")
+            st.warning("Nenhum contrato encontrado.")
