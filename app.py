@@ -4,11 +4,28 @@ import pandas as pd
 from datetime import datetime, timedelta
 import time
 
-# --- CONFIGURAÇÃO ---
-st.set_page_config(page_title="Auditoria Gov Federal", page_icon="🏛️", layout="wide")
+# --- CONFIGURAÇÃO DA PÁGINA ---
+st.set_page_config(
+    page_title="GovAudit Pro", 
+    page_icon="🛡️", 
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# --- CSS CUSTOMIZADO (ESTÉTICA) ---
+st.markdown("""
+    <style>
+        .block-container {padding-top: 1.5rem; padding-bottom: 3rem;}
+        #MainMenu {visibility: hidden;}
+        footer {visibility: hidden;}
+        header {visibility: hidden;}
+        .stMetric {background-color: #f0f2f6; padding: 10px; border-radius: 5px; border-left: 5px solid #1f77b4;}
+    </style>
+""", unsafe_allow_html=True)
+
 PORTAL_KEY = "d03ede6b6072b78e6df678b6800d4ba1"
 
-# --- LISTA DE ÓRGÃOS ---
+# --- DADOS ---
 ORGAOS_SIAFI = {
     "Secretaria-Geral Presidência (Planalto)": "20101",
     "Ministério da Saúde": "36000",
@@ -31,59 +48,24 @@ def safe_float(valor):
     try: return float(valor)
     except: return 0.0
 
-# --- MOTOR DE AUDITORIA (Retorna True se tiver problema) ---
-def checar_antecedentes_rapido(cnpj_alvo):
-    if not cnpj_alvo: return False
-    
-    cnpj_limpo = limpar_string(cnpj_alvo)
-    raiz_alvo = cnpj_limpo[:8]
-    bases = ["acordos-leniencia", "ceis", "cnep"]
-    
-    for endpoint in bases:
-        try:
-            url = f"https://api.portaldatransparencia.gov.br/api-de-dados/{endpoint}"
-            params = {"cnpjSancionado": cnpj_limpo, "pagina": 1}
-            resp = requests.get(url, params=params, headers=get_headers(), timeout=5)
-            
-            if resp.status_code == 200:
-                itens = resp.json()
-                for item in itens:
-                    # Lógica do Fantasma e Raiz
-                    cnpj_item = ""
-                    try: 
-                        sancionado = item.get('sancionado', {})
-                        cnpj_item = sancionado.get('codigoFormatado') or item.get('pessoa', {}).get('cnpjFormatado')
-                    except: pass
-                    
-                    # Se bate a raiz
-                    if cnpj_item and limpar_string(cnpj_item)[:8] == raiz_alvo:
-                        return True # SUJO
-                    
-                    # Se for Leniência Fantasma (Sem CNPJ mas retornou na busca)
-                    if endpoint == "acordos-leniencia" and not cnpj_item:
-                        return True # SUJO
-        except: pass
-    return False # LIMPO
-
-# --- AUDITORIA DETALHADA (Para a Aba 1) ---
+@st.cache_data(ttl=3600) # Cache para não ficar lento
 def auditar_cnpj_detalhado(cnpj_alvo):
     resultados = []
     cnpj_limpo = limpar_string(cnpj_alvo)
     raiz_alvo = cnpj_limpo[:8]
-    
-    bases = {"acordos-leniencia": "ACORDO DE LENIÊNCIA", "ceis": "INIDÔNEO (CEIS)", "cnep": "PUNIDO (CNEP)"}
+    bases = {"acordos-leniencia": "Acordo Leniência", "ceis": "Inidôneos (CEIS)", "cnep": "Punidos (CNEP)"}
     
     for endpoint, nome_base in bases.items():
         try:
             url = f"https://api.portaldatransparencia.gov.br/api-de-dados/{endpoint}"
             params = {"cnpjSancionado": cnpj_limpo, "pagina": 1}
-            resp = requests.get(url, params=params, headers=get_headers(), timeout=10)
-            
+            resp = requests.get(url, params=params, headers=get_headers(), timeout=5)
             if resp.status_code == 200:
                 itens = resp.json()
                 for item in itens:
+                    # Lógica Fantasma & Raiz
                     cnpj_item = ""
-                    nome_item = "Nome não informado"
+                    nome_item = "Não informado"
                     try: 
                         sancionado = item.get('sancionado', {})
                         cnpj_item = sancionado.get('codigoFormatado') or item.get('pessoa', {}).get('cnpjFormatado')
@@ -92,11 +74,10 @@ def auditar_cnpj_detalhado(cnpj_alvo):
                     except: pass
                     
                     match = False
-                    if cnpj_item:
-                        if limpar_string(cnpj_item)[:8] == raiz_alvo: match = True
-                    elif nome_base == "ACORDO DE LENIÊNCIA" and not cnpj_item:
+                    if cnpj_item and limpar_string(cnpj_item)[:8] == raiz_alvo: match = True
+                    elif nome_base == "Acordo Leniência" and not cnpj_item:
                         match = True
-                        item['_aviso_oculto'] = True 
+                        item['_aviso_oculto'] = True
 
                     if match:
                         item['_origem'] = nome_base
@@ -105,13 +86,21 @@ def auditar_cnpj_detalhado(cnpj_alvo):
         except: pass
     return resultados
 
-# --- CONTRATOS ---
+def checar_risco_simples(cnpj):
+    # Versão simplificada para usar dentro do loop de contratos
+    res = auditar_cnpj_detalhado(cnpj)
+    return True if len(res) > 0 else False
+
 def buscar_contratos(codigo_orgao):
-    lista_final = []
+    lista = []
     dt_fim = datetime.now()
     dt_ini = dt_fim - timedelta(days=730)
     
-    for pag in range(1, 4):
+    # Barra de progresso visual
+    bar = st.progress(0, text="Conectando ao Governo...")
+    
+    for i, pag in enumerate(range(1, 4)):
+        bar.progress((i+1)*33, text=f"Baixando página {pag}...")
         try:
             params = {
                 "dataInicial": dt_ini.strftime("%d/%m/%Y"), "dataFinal": dt_fim.strftime("%d/%m/%Y"),
@@ -122,122 +111,140 @@ def buscar_contratos(codigo_orgao):
             if r.status_code == 200:
                 dados = r.json()
                 if not dados: break
-                lista_final.extend(dados)
+                lista.extend(dados)
             else: break
         except: break
-    return lista_final
+    bar.empty()
+    return lista
 
-# --- INTERFACE ---
-st.title("🏛️ Auditoria Governamental Integrada")
-st.markdown("---")
-
-aba1, aba2 = st.tabs(["🕵️ Análise de Risco (Individual)", "💰 Contratos & Compliance Cruzado"])
-
-# --- ABA 1 ---
-with aba1:
-    st.header("Consulta de Compliance")
-    col1, col2 = st.columns([3, 1])
-    cnpj_input = col1.text_input("CNPJ:", value="05.144.757/0001-72")
+# --- LAYOUT SIDEBAR ---
+with st.sidebar:
+    st.title("🛡️ Painel de Controle")
+    st.markdown("Filtros e Configurações")
     
-    if col2.button("Verificar", type="primary"):
-        with st.spinner("Analisando sanções..."):
+    modo = st.radio("Selecione o Módulo:", ["🕵️ Auditoria Individual", "💰 Monitor de Contratos"])
+    
+    st.divider()
+    st.caption(f"Versão 4.2 Stable | Base: Portal da Transparência")
+    st.caption("Desenvolvido para Compliance Ágil")
+
+# --- LÓGICA PRINCIPAL ---
+
+if modo == "🕵️ Auditoria Individual":
+    st.title("Auditoria de Compliance (CNPJ)")
+    st.markdown("Verifique se uma empresa específica possui sanções no CEIS, CNEP ou Acordos de Leniência.")
+    
+    col1, col2 = st.columns([3, 1])
+    cnpj_input = col1.text_input("Digite o CNPJ:", value="05.144.757/0001-72", placeholder="00.000.000/0000-00")
+    
+    if col2.button("🔍 Rastrear", type="primary"):
+        with st.spinner("Cruzando dados federais..."):
+            # 1. Identidade
             try:
                 r = requests.get(f"https://minhareceita.org/{limpar_string(cnpj_input)}", timeout=3)
-                if r.status_code == 200: st.info(f"Razão Social: **{r.json().get('razao_social')}**")
+                if r.status_code == 200:
+                    dados_rec = r.json()
+                    st.info(f"Empresa: **{dados_rec.get('razao_social')}** | Status: {dados_rec.get('descricao_situacao_cadastral')}")
             except: pass
-
-            sancoes = auditar_cnpj_detalhado(cnpj_input)
-            st.divider()
             
+            # 2. Sanções
+            sancoes = auditar_cnpj_detalhado(cnpj_input)
+            
+            st.divider()
             if sancoes:
-                st.error(f"🚨 **ALERTA: {len(sancoes)} OCORRÊNCIAS**")
+                st.error(f"🚨 **RISCO ALTO:** Foram encontrados {len(sancoes)} registros impeditivos.")
                 for s in sancoes:
-                    titulo = f"⚠️ {s['_origem']}"
-                    if s.get('_aviso_oculto'): titulo += " (Sigilo Parcial)"
-                    with st.expander(titulo):
-                        st.write(f"**Empresa:** {s['_nome_exibicao']}")
+                    txt_titulo = f"{s['_origem']}"
+                    if s.get('_aviso_oculto'): txt_titulo += " (Dados Sigilosos/Parciais)"
+                    
+                    with st.expander(f"⚠️ {txt_titulo}"):
+                        st.write(f"**Envolvido:** {s['_nome_exibicao']}")
                         st.write(f"**Motivo:** {s.get('motivo') or s.get('situacaoAcordo')}")
+                        st.write(f"**Órgão Sancionador:** {s.get('orgaoSancionador', {}).get('nome')}")
             else:
                 st.success("✅ **NADA CONSTA**")
+                st.markdown(f"A raiz do CNPJ **{cnpj_input}** não consta nas listas de sanções vigentes.")
 
-# --- ABA 2 (O RADAR CRUZADO) ---
-with aba2:
-    st.header("Monitoramento de Contratos + Risco do Fornecedor")
-    orgao_nome = st.selectbox("Selecione o Órgão:", list(ORGAOS_SIAFI.keys()))
+elif modo == "💰 Monitor de Contratos":
+    st.title("Monitoramento de Gastos Públicos")
     
-    if st.button("Buscar e Analisar Risco"):
-        cod = ORGAOS_SIAFI[orgao_nome]
+    # Filtros no topo
+    c_filt1, c_filt2 = st.columns([3, 1])
+    orgao_selecionado = c_filt1.selectbox("Selecione o Órgão:", list(ORGAOS_SIAFI.keys()))
+    analisar_risco = c_filt2.checkbox("Ativar Radar de Risco?", value=True, help="Verifica antecedentes dos 10 maiores fornecedores.")
+    
+    if st.button("📥 Baixar Dados do Governo"):
+        cod_siafi = ORGAOS_SIAFI[orgao_selecionado]
         
-        # 1. Busca Contratos
-        with st.spinner(f"1/2 Baixando contratos da {orgao_nome}..."):
-            raw = buscar_contratos(cod)
+        raw_data = buscar_contratos(cod_siafi)
         
-        if raw:
-            dados_tab = []
-            total = 0.0
-            cnpjs_unicos = set()
+        if raw_data:
+            tabela = []
+            total_gasto = 0.0
             
-            # Processa dados básicos
-            for item in raw:
+            # Processamento
+            for item in raw_data:
                 val = safe_float(item.get('valorInicialCompra') or item.get('valorFinalCompra'))
-                cnpj_fornecedor = item.get('fornecedor', {}).get('cnpjFormatado', '')
+                cnpj = item.get('fornecedor', {}).get('cnpjFormatado', '')
+                nome = item.get('fornecedor', {}).get('nome', 'Sem Nome')
                 
-                total += val
-                if cnpj_fornecedor: cnpjs_unicos.add(cnpj_fornecedor)
-                
-                dados_tab.append({
-                    "Data": item.get('dataAssinatura'),
-                    "Fornecedor": item.get('fornecedor', {}).get('nome', 'N/A')[:30],
-                    "CNPJ": cnpj_fornecedor,
-                    "Objeto": item.get('objeto', 'N/A')[:60] + "...",
-                    "Valor": val,
-                    "Risco": "❓" # Placeholder
+                total_gasto += val
+                tabela.append({
+                    "Data Assinatura": item.get('dataAssinatura'),
+                    "Valor (R$)": val,
+                    "Fornecedor": nome,
+                    "CNPJ": cnpj,
+                    "Objeto": item.get('objeto', '')[:100],
+                    "Risco": "⚪ Não analisado"
                 })
             
-            # 2. Auditoria em Lote (Limitada para performance)
-            st.info(f"Analisando antecedentes de {len(cnpjs_unicos)} empresas encontradas...")
-            progress_bar = st.progress(0)
+            df = pd.DataFrame(tabela)
             
-            status_map = {}
-            for i, c in enumerate(cnpjs_unicos):
-                # Atualiza barra de progresso
-                progress_bar.progress((i + 1) / len(cnpjs_unicos))
+            # Análise de Risco (Se ativado)
+            if analisar_risco:
+                st.info("🔎 Analisando fornecedores (Amostra dos maiores contratos)...")
+                # Pega os CNPJs únicos dos maiores contratos para não demorar
+                df = df.sort_values("Valor (R$)", ascending=False)
+                top_cnpjs = df['CNPJ'].unique()[:10] # Limite de 10 para ser rápido
                 
-                # Checa se é sujo
-                is_sujo = checar_antecedentes_rapido(c)
-                status_map[c] = "🔴 ALERTA" if is_sujo else "🟢 OK"
+                status_cache = {}
+                for cnpj_teste in top_cnpjs:
+                    if cnpj_teste:
+                        is_sujo = checar_risco_simples(cnpj_teste)
+                        status_cache[cnpj_teste] = "🔴 ALERTA" if is_sujo else "🟢 OK"
+                        time.sleep(0.1)
                 
-                # Pequena pausa para a API não bloquear
-                time.sleep(0.1) 
-            
-            progress_bar.empty()
-            
-            # 3. Atualiza Tabela
-            for linha in dados_tab:
-                cnpj = linha["CNPJ"]
-                linha["Risco"] = status_map.get(cnpj, "⚪ N/A")
+                # Aplica na tabela
+                df['Risco'] = df['CNPJ'].map(status_cache).fillna("⚪ N/A")
 
-            df = pd.DataFrame(dados_tab)
-            
             # Métricas
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Total Gasto", f"R$ {total:,.2f}")
-            c2.metric("Contratos", len(df))
-            qtd_risco = len(df[df["Risco"] == "🔴 ALERTA"])
-            c3.metric("Fornecedores em Alerta", qtd_risco, delta_color="inverse" if qtd_risco > 0 else "normal")
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Volume Financeiro", f"R$ {total_gasto:,.2f}")
+            m2.metric("Contratos Encontrados", len(df))
+            if analisar_risco:
+                riscos = len(df[df['Risco'] == "🔴 ALERTA"])
+                m3.metric("Fornecedores Suspeitos", riscos, delta_color="inverse")
             
-            # Mostra Tabela Colorida
-            def color_risk(val):
-                color = '#ffcccc' if val == '🔴 ALERTA' else '#ccffcc' if val == '🟢 OK' else ''
-                return f'background-color: {color}'
-
-            st.dataframe(
-                df.sort_values("Valor", ascending=False).style.applymap(color_risk, subset=['Risco']).format({"Valor": "R$ {:,.2f}"}),
-                use_container_width=True, hide_index=True
+            # Botão de Download
+            csv = df.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="💾 Baixar Relatório (CSV)",
+                data=csv,
+                file_name=f"auditoria_{orgao_selecionado}_{datetime.now().strftime('%Y%m%d')}.csv",
+                mime="text/csv",
             )
             
-            if qtd_risco > 0:
-                st.warning("⚠️ Atenção: Foram encontrados fornecedores com sanções vigentes nesta lista de contratos.")
-
+            # Tabela Visual
+            def style_risk(v):
+                if v == '🔴 ALERTA': return 'background-color: #ffcccc; color: red; font-weight: bold;'
+                if v == '🟢 OK': return 'color: green; font-weight: bold;'
+                return ''
+                
+            st.dataframe(
+                df.style.applymap(style_risk, subset=['Risco']).format({"Valor (R$)": "R$ {:,.2f}"}),
+                use_container_width=True,
+                hide_index=True
+            )
+            
         else:
-            st.warning("Nenhum contrato encontrado.")
+            st.warning("Nenhum contrato encontrado para este órgão no período de 2 anos.")
