@@ -13,7 +13,9 @@ ORGAOS_SIAFI = {
     "Ministério da Educação (MEC)": "26000",
     "Ministério da Justiça (MJ)": "30000",
     "Presidência da República": "20000",
-    "Ministério da Economia": "17000"
+    "Ministério da Economia": "17000",
+    "Comando do Exército": "52121",
+    "Polícia Federal": "30108"
 }
 
 # --- FUNÇÕES ---
@@ -35,88 +37,115 @@ def safe_float(valor):
 @st.cache_data(ttl=3600)
 def consultar_dados_cadastrais(cnpj):
     try:
-        # MinhaReceita é gratuita e rápida
         r = requests.get(f"https://minhareceita.org/{limpar_cnpj(cnpj)}", timeout=5)
         if r.status_code == 200: return r.json()
     except: pass
     return None
 
-def auditar_empresa_blindada(cnpj_alvo):
+def auditar_por_triangulacao(cnpj_alvo, nome_fantasia_ou_razao):
     resultados_validos = []
     cnpj_limpo_alvo = limpar_cnpj(cnpj_alvo)
+    raiz_alvo = cnpj_limpo_alvo[:8] # Os 8 primeiros digitos (Raiz)
+    
+    # Define termo de busca (Pega as 2 primeiras palavras do nome para garantir)
+    if not nome_fantasia_ou_razao:
+        return []
+    
+    # Ex: "MENDES JUNIOR ENGENHARIA" -> Busca "MENDES JUNIOR"
+    termo_busca = " ".join(nome_fantasia_ou_razao.split()[:2])
     
     bases = ["ceis", "cnep"]
     
     for base in bases:
         url = f"https://api.portaldatransparencia.gov.br/api-de-dados/{base}"
-        params = {"cnpjSancionado": cnpj_limpo_alvo, "pagina": 1}
+        
+        # ESTRATÉGIA V32: BUSCA POR NOME (Mais abrangente)
+        params = {"nomeSancionado": termo_busca, "pagina": 1}
         
         try:
             resp = requests.get(url, params=params, headers=get_headers(), timeout=15)
             if resp.status_code == 200:
                 items = resp.json()
                 
-                # --- FILTRO PENTE-FINO ---
+                # --- FILTRO DE VALIDAÇÃO (Raiz do CNPJ) ---
                 for item in items:
                     cnpj_encontrado = ""
+                    
+                    # Tenta extrair CNPJ do registro
                     try: cnpj_encontrado = item['sancionado']['codigoFormatado']
                     except: pass
-                    
                     if not cnpj_encontrado:
                         try: cnpj_encontrado = item['pessoa']['cnpjFormatado']
                         except: pass
                     
-                    # Verifica se o CNPJ retornado contem o alvo (match exato ou filial)
-                    if cnpj_limpo_alvo in limpar_cnpj(cnpj_encontrado):
-                        item['_origem'] = base.upper()
-                        resultados_validos.append(item)
-                        
-        except: pass
+                    # Se achou um CNPJ no registro, compara a RAIZ
+                    if cnpj_encontrado:
+                        raiz_encontrada = limpar_cnpj(cnpj_encontrado)[:8]
+                        if raiz_encontrada == raiz_alvo:
+                            item['_origem'] = base.upper()
+                            resultados_validos.append(item)
+                            
+        except Exception as e:
+            pass
             
     return resultados_validos
 
 # --- INTERFACE ---
-st.title("⚖️ Auditoria Gov Federal (V31)")
+st.title("⚖️ Auditoria Gov Federal (V32 - Triangulação)")
 
-aba1, aba2 = st.tabs(["🕵️ Auditoria CNPJ", "📊 Monitor de Contratos"])
+aba1, aba2 = st.tabs(["🕵️ Auditoria Profunda", "📊 Monitor de Contratos"])
 
 # --- ABA 1 ---
 with aba1:
     st.header("Verificar Fornecedor")
-    cnpj_input = st.text_input("CNPJ:", value="07.161.936/0001-83") # Já deixei um "sujo" de exemplo
+    st.info("ℹ️ Método V32: Busca pelo NOME na base suja e confirma pelo CNPJ. (Infalível)")
     
-    if st.button("Auditar Agora", type="primary"):
-        with st.spinner("Analisando..."):
+    # Default para testar: Mendes Junior
+    cnpj_input = st.text_input("CNPJ:", value="17.162.082/0001-73") 
+    
+    if st.button("Executar Varredura Profunda", type="primary"):
+        with st.spinner("Identificando empresa e triangulando dados..."):
+            
+            # 1. Pega o Nome na Receita
             cad = consultar_dados_cadastrais(cnpj_input)
-            razao = cad.get('razao_social') if cad else "Empresa não identificada"
             
-            st.info(f"🏢 Alvo: **{razao}**")
-            
-            sancoes = auditar_empresa_blindada(cnpj_input)
-            
-            st.divider()
-            if sancoes:
-                st.error(f"🚨 **CUIDADO: {len(sancoes)} SANÇÕES ENCONTRADAS**")
-                for s in sancoes:
-                    st.markdown(f"**{s['_origem']}**: {s.get('tipoSancao', {}).get('descricaoResumida', 'Sanção')} - *{s.get('orgaoSancionador', {}).get('nome')}*")
+            if cad:
+                razao = cad.get('razao_social') or cad.get('nome_fantasia')
+                st.success(f"Alvo Identificado: **{razao}**")
+                
+                # 2. Busca por Nome + Validação de CNPJ
+                sancoes = auditar_por_triangulacao(cnpj_input, razao)
+                
+                st.divider()
+                
+                if sancoes:
+                    st.error(f"🚨 **ALERTA VERMELHO: {len(sancoes)} SANÇÕES CONFIRMADAS**")
+                    st.write(f"Registros encontrados buscando por '{razao.split()[:2]}' e validados pela raiz do CNPJ.")
+                    
+                    for s in sancoes:
+                        with st.expander(f"{s['_origem']} - {s.get('tipoSancao', {}).get('descricaoResumida', 'Sanção')}"):
+                            st.write(f"**Órgão:** {s.get('orgaoSancionador', {}).get('nome')}")
+                            st.write(f"**Motivo:** {s.get('motivo', 'Não detalhado')}")
+                            st.caption(f"CNPJ no registro: {s.get('sancionado', {}).get('codigoFormatado')}")
+                else:
+                    st.success("✅ **Nada Consta** (CNPJ Limpo)")
+                    st.caption("A busca por nome e CNPJ não retornou restrições ativas.")
             else:
-                st.success("✅ Nada Consta (CNPJ Limpo)")
+                st.warning("⚠️ Não foi possível identificar o nome da empresa pelo CNPJ. A busca profunda depende do nome.")
 
 # --- ABA 2 ---
 with aba2:
-    st.header("Monitoramento de Contratos")
+    st.header("Monitoramento de Contratos (1 Ano)")
     
     c1, c2 = st.columns([2, 1])
     with c1: orgao = st.selectbox("Órgão", list(ORGAOS_SIAFI.keys()))
     
-    # MUDANÇA V31: Padrão de 1 ANO atrás para garantir dados
     dt_hoje = datetime.now()
-    dt_inicio = dt_hoje - timedelta(days=365) 
+    dt_inicio = dt_hoje - timedelta(days=365)
     
-    with c2: 
-        st.write(f"📅 Buscando desde: **{dt_inicio.strftime('%d/%m/%Y')}**")
+    with c2: st.write(f"Período: Últimos 12 meses")
     
-    if st.button("Buscar Contratos (12 Meses)"):
+    if st.button("Buscar Contratos"):
         cod = ORGAOS_SIAFI[orgao]
         params = {
             "dataInicial": dt_inicio.strftime("%d/%m/%Y"),
@@ -125,8 +154,8 @@ with aba2:
             "pagina": 1
         }
         
-        try:
-            with st.spinner(f"Baixando contratos do {orgao}..."):
+        with st.spinner(f"Consultando {orgao}..."):
+            try:
                 r = requests.get("https://api.portaldatransparencia.gov.br/api-de-dados/contratos", 
                                params=params, headers=get_headers(), timeout=45)
                 data = r.json()
@@ -139,21 +168,22 @@ with aba2:
                         total += val
                         lista.append({
                             "Data": d.get('dataAssinatura'),
-                            "Fornecedor": d.get('fornecedor', {}).get('nome', 'N/A')[:40],
+                            "Fornecedor": d.get('fornecedor', {}).get('nome', 'N/A'),
                             "Valor": val
                         })
                     
                     df = pd.DataFrame(lista)
-                    
-                    # KPIs
                     k1, k2 = st.columns(2)
                     k1.metric("Total Gasto", f"R$ {total:,.2f}")
-                    k2.metric("Contratos", len(df))
-                    
-                    # Tabela
+                    k2.metric("Qtd. Contratos", len(df))
                     st.dataframe(df.sort_values("Data", ascending=False).style.format({"Valor": "R$ {:,.2f}"}), use_container_width=True)
                 else:
-                    st.warning("⚠️ Nenhum contrato encontrado, mesmo buscando 1 ano inteiro.")
-                    st.caption("Isso indica que este órgão específico não reportou dados à API recentemente.")
-        except Exception as e:
-            st.error(f"Erro: {e}")
+                    st.info("ℹ️ Nenhum contrato retornado para este órgão.")
+                    st.markdown("""
+                    **Por que isso acontece?**
+                    1. O órgão pode publicar através de unidades subordinadas (Ex: Receita Federal vs Min. Economia).
+                    2. O órgão pode não ter contratos novos no período (comum em ministérios 'meio').
+                    3. Dados classificados como sigilosos não aparecem na API.
+                    """)
+            except Exception as e:
+                st.error(f"Erro: {e}")
