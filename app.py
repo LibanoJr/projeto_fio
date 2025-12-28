@@ -7,25 +7,23 @@ import time
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(
     page_title="GovAudit Pro", 
-    page_icon="🛡️", 
-    layout="wide",
-    initial_sidebar_state="expanded"
+    page_icon="⚖️", 
+    layout="wide"
 )
 
-# --- CSS CUSTOMIZADO (ESTÉTICA) ---
+# --- CSS (VISUAL LIMPO) ---
 st.markdown("""
     <style>
-        .block-container {padding-top: 1.5rem; padding-bottom: 3rem;}
+        .block-container {padding-top: 2rem;}
         #MainMenu {visibility: hidden;}
         footer {visibility: hidden;}
-        header {visibility: hidden;}
-        .stMetric {background-color: #f0f2f6; padding: 10px; border-radius: 5px; border-left: 5px solid #1f77b4;}
+        .stMetric {background-color: #f8f9fa; padding: 15px; border-radius: 8px; border-left: 5px solid #1f77b4;}
     </style>
 """, unsafe_allow_html=True)
 
 PORTAL_KEY = "d03ede6b6072b78e6df678b6800d4ba1"
 
-# --- DADOS ---
+# --- LISTA DE ÓRGÃOS ---
 ORGAOS_SIAFI = {
     "Secretaria-Geral Presidência (Planalto)": "20101",
     "Ministério da Saúde": "36000",
@@ -48,7 +46,7 @@ def safe_float(valor):
     try: return float(valor)
     except: return 0.0
 
-@st.cache_data(ttl=3600) # Cache para não ficar lento
+@st.cache_data(ttl=3600)
 def auditar_cnpj_detalhado(cnpj_alvo):
     resultados = []
     cnpj_limpo = limpar_string(cnpj_alvo)
@@ -63,7 +61,6 @@ def auditar_cnpj_detalhado(cnpj_alvo):
             if resp.status_code == 200:
                 itens = resp.json()
                 for item in itens:
-                    # Lógica Fantasma & Raiz
                     cnpj_item = ""
                     nome_item = "Não informado"
                     try: 
@@ -87,7 +84,7 @@ def auditar_cnpj_detalhado(cnpj_alvo):
     return resultados
 
 def checar_risco_simples(cnpj):
-    # Versão simplificada para usar dentro do loop de contratos
+    # Função rápida para usar na tabela
     res = auditar_cnpj_detalhado(cnpj)
     return True if len(res) > 0 else False
 
@@ -96,11 +93,11 @@ def buscar_contratos(codigo_orgao):
     dt_fim = datetime.now()
     dt_ini = dt_fim - timedelta(days=730)
     
-    # Barra de progresso visual
-    bar = st.progress(0, text="Conectando ao Governo...")
+    # Barra visual
+    bar = st.progress(0, text="Iniciando conexão...")
     
     for i, pag in enumerate(range(1, 4)):
-        bar.progress((i+1)*33, text=f"Baixando página {pag}...")
+        bar.progress((i+1)*33, text=f"Baixando página {pag} de contratos...")
         try:
             params = {
                 "dataInicial": dt_ini.strftime("%d/%m/%Y"), "dataFinal": dt_fim.strftime("%d/%m/%Y"),
@@ -117,134 +114,108 @@ def buscar_contratos(codigo_orgao):
     bar.empty()
     return lista
 
-# --- LAYOUT SIDEBAR ---
-with st.sidebar:
-    st.title("🛡️ Painel de Controle")
-    st.markdown("Filtros e Configurações")
-    
-    modo = st.radio("Selecione o Módulo:", ["🕵️ Auditoria Individual", "💰 Monitor de Contratos"])
-    
-    st.divider()
-    st.caption(f"Versão 4.2 Stable | Base: Portal da Transparência")
-    st.caption("Desenvolvido para Compliance Ágil")
+# --- INTERFACE ---
+st.title("🛡️ Auditoria Gov Federal")
+st.markdown("---")
 
-# --- LÓGICA PRINCIPAL ---
+# ABAS VOLTARAM AQUI!
+aba1, aba2 = st.tabs(["🕵️ Análise de Risco (CNPJ)", "💰 Monitor de Contratos"])
 
-if modo == "🕵️ Auditoria Individual":
-    st.title("Auditoria de Compliance (CNPJ)")
-    st.markdown("Verifique se uma empresa específica possui sanções no CEIS, CNEP ou Acordos de Leniência.")
-    
+# --- ABA 1: CNPJ ---
+with aba1:
+    st.header("Verificar Fornecedor")
     col1, col2 = st.columns([3, 1])
-    cnpj_input = col1.text_input("Digite o CNPJ:", value="05.144.757/0001-72", placeholder="00.000.000/0000-00")
+    cnpj_input = col1.text_input("CNPJ:", value="05.144.757/0001-72", placeholder="00.000.000/0000-00")
     
-    if col2.button("🔍 Rastrear", type="primary"):
-        with st.spinner("Cruzando dados federais..."):
-            # 1. Identidade
+    if col2.button("🔍 Auditar", type="primary"):
+        with st.spinner("Analisando sanções..."):
             try:
                 r = requests.get(f"https://minhareceita.org/{limpar_string(cnpj_input)}", timeout=3)
-                if r.status_code == 200:
-                    dados_rec = r.json()
-                    st.info(f"Empresa: **{dados_rec.get('razao_social')}** | Status: {dados_rec.get('descricao_situacao_cadastral')}")
+                if r.status_code == 200: st.info(f"Razão Social: **{r.json().get('razao_social')}**")
             except: pass
-            
-            # 2. Sanções
+
             sancoes = auditar_cnpj_detalhado(cnpj_input)
             
             st.divider()
             if sancoes:
-                st.error(f"🚨 **RISCO ALTO:** Foram encontrados {len(sancoes)} registros impeditivos.")
+                st.error(f"🚨 **RISCO ALTO: {len(sancoes)} OCORRÊNCIAS**")
                 for s in sancoes:
-                    txt_titulo = f"{s['_origem']}"
-                    if s.get('_aviso_oculto'): txt_titulo += " (Dados Sigilosos/Parciais)"
-                    
-                    with st.expander(f"⚠️ {txt_titulo}"):
+                    titulo = f"⚠️ {s['_origem']}"
+                    if s.get('_aviso_oculto'): titulo += " (Sigilo Parcial)"
+                    with st.expander(titulo):
                         st.write(f"**Envolvido:** {s['_nome_exibicao']}")
                         st.write(f"**Motivo:** {s.get('motivo') or s.get('situacaoAcordo')}")
-                        st.write(f"**Órgão Sancionador:** {s.get('orgaoSancionador', {}).get('nome')}")
             else:
-                st.success("✅ **NADA CONSTA**")
-                st.markdown(f"A raiz do CNPJ **{cnpj_input}** não consta nas listas de sanções vigentes.")
+                st.success("✅ **NADA CONSTA** - Fornecedor Limpo")
 
-elif modo == "💰 Monitor de Contratos":
-    st.title("Monitoramento de Gastos Públicos")
+# --- ABA 2: CONTRATOS ---
+with aba2:
+    st.header("Análise de Gastos Públicos")
     
-    # Filtros no topo
-    c_filt1, c_filt2 = st.columns([3, 1])
-    orgao_selecionado = c_filt1.selectbox("Selecione o Órgão:", list(ORGAOS_SIAFI.keys()))
-    analisar_risco = c_filt2.checkbox("Ativar Radar de Risco?", value=True, help="Verifica antecedentes dos 10 maiores fornecedores.")
+    c_input, c_chk = st.columns([3, 1])
+    orgao_nome = c_input.selectbox("Selecione o Órgão:", list(ORGAOS_SIAFI.keys()))
+    analisar_risco = c_chk.checkbox("Ativar Radar de Risco", value=True, help="Audita os 10 maiores fornecedores encontrados.")
     
-    if st.button("📥 Baixar Dados do Governo"):
-        cod_siafi = ORGAOS_SIAFI[orgao_selecionado]
+    if st.button("📥 Baixar Dados"):
+        cod = ORGAOS_SIAFI[orgao_nome]
+        raw = buscar_contratos(cod)
         
-        raw_data = buscar_contratos(cod_siafi)
-        
-        if raw_data:
+        if raw:
             tabela = []
-            total_gasto = 0.0
+            total = 0.0
             
-            # Processamento
-            for item in raw_data:
+            for item in raw:
                 val = safe_float(item.get('valorInicialCompra') or item.get('valorFinalCompra'))
                 cnpj = item.get('fornecedor', {}).get('cnpjFormatado', '')
-                nome = item.get('fornecedor', {}).get('nome', 'Sem Nome')
                 
-                total_gasto += val
+                total += val
                 tabela.append({
-                    "Data Assinatura": item.get('dataAssinatura'),
+                    "Data": item.get('dataAssinatura'),
                     "Valor (R$)": val,
-                    "Fornecedor": nome,
+                    "Fornecedor": item.get('fornecedor', {}).get('nome', 'N/A')[:40],
                     "CNPJ": cnpj,
                     "Objeto": item.get('objeto', '')[:100],
-                    "Risco": "⚪ Não analisado"
+                    "Risco": "⚪ N/A"
                 })
             
             df = pd.DataFrame(tabela)
             
-            # Análise de Risco (Se ativado)
+            # Análise de Risco (Top 10)
             if analisar_risco:
-                st.info("🔎 Analisando fornecedores (Amostra dos maiores contratos)...")
-                # Pega os CNPJs únicos dos maiores contratos para não demorar
-                df = df.sort_values("Valor (R$)", ascending=False)
-                top_cnpjs = df['CNPJ'].unique()[:10] # Limite de 10 para ser rápido
+                st.info("🔎 Verificando antecedentes dos maiores contratos...")
+                df_sorted = df.sort_values("Valor (R$)", ascending=False)
+                top_cnpjs = df_sorted['CNPJ'].unique()[:10]
                 
                 status_cache = {}
-                for cnpj_teste in top_cnpjs:
-                    if cnpj_teste:
-                        is_sujo = checar_risco_simples(cnpj_teste)
-                        status_cache[cnpj_teste] = "🔴 ALERTA" if is_sujo else "🟢 OK"
+                for c in top_cnpjs:
+                    if c:
+                        is_sujo = checar_risco_simples(c)
+                        status_cache[c] = "🔴 ALERTA" if is_sujo else "🟢 OK"
                         time.sleep(0.1)
                 
-                # Aplica na tabela
                 df['Risco'] = df['CNPJ'].map(status_cache).fillna("⚪ N/A")
 
             # Métricas
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Volume Financeiro", f"R$ {total_gasto:,.2f}")
-            m2.metric("Contratos Encontrados", len(df))
+            k1, k2, k3 = st.columns(3)
+            k1.metric("Total Gasto", f"R$ {total:,.2f}")
+            k2.metric("Qtd. Contratos", len(df))
             if analisar_risco:
-                riscos = len(df[df['Risco'] == "🔴 ALERTA"])
-                m3.metric("Fornecedores Suspeitos", riscos, delta_color="inverse")
+                suspeitos = len(df[df['Risco'] == "🔴 ALERTA"])
+                k3.metric("Fornecedores Suspeitos", suspeitos, delta_color="inverse")
             
-            # Botão de Download
+            # Botão CSV
             csv = df.to_csv(index=False).encode('utf-8')
-            st.download_button(
-                label="💾 Baixar Relatório (CSV)",
-                data=csv,
-                file_name=f"auditoria_{orgao_selecionado}_{datetime.now().strftime('%Y%m%d')}.csv",
-                mime="text/csv",
-            )
+            st.download_button("💾 Download CSV", csv, "auditoria_gov.csv", "text/csv")
             
-            # Tabela Visual
-            def style_risk(v):
-                if v == '🔴 ALERTA': return 'background-color: #ffcccc; color: red; font-weight: bold;'
-                if v == '🟢 OK': return 'color: green; font-weight: bold;'
+            # Tabela Colorida
+            def color_risk(val):
+                if val == '🔴 ALERTA': return 'background-color: #ffcccc; color: red; font-weight: bold;'
+                if val == '🟢 OK': return 'color: green; font-weight: bold;'
                 return ''
-                
+
             st.dataframe(
-                df.style.applymap(style_risk, subset=['Risco']).format({"Valor (R$)": "R$ {:,.2f}"}),
-                use_container_width=True,
-                hide_index=True
+                df.style.applymap(color_risk, subset=['Risco']).format({"Valor (R$)": "R$ {:,.2f}"}),
+                use_container_width=True, hide_index=True
             )
-            
         else:
-            st.warning("Nenhum contrato encontrado para este órgão no período de 2 anos.")
+            st.warning("Nenhum contrato encontrado neste período.")
