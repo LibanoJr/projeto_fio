@@ -123,9 +123,8 @@ def analisar_objeto_ia(objeto_texto):
     if not objeto_texto: return "Vazio"
     
     try:
-        # CORREÇÃO CRÍTICA: Mudado para gemini-1.5-flash (mais estável e com cota maior)
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        
+        model = genai.GenerativeModel('gemini-pro')
+
         prompt = f"""Analise o seguinte objeto de contrato público e retorne APENAS 'ALTO', 'MÉDIO' ou 'BAIXO' risco.
         Considere ALTO risco se for muito genérico, vago ou envolver valores suspeitos sem detalhamento.
         Objeto: '{objeto_texto}'"""
