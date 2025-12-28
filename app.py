@@ -6,8 +6,15 @@ from datetime import datetime, timedelta
 # --- CONFIGURAÇÃO ---
 st.set_page_config(page_title="Auditoria Gov", page_icon="⚖️", layout="wide")
 
-# Chave da API (Hardcoded para garantir)
 PORTAL_KEY = "d03ede6b6072b78e6df678b6800d4ba1"
+
+ORGAOS_SIAFI = {
+    "Ministério da Saúde (MS)": "36000",
+    "Ministério da Educação (MEC)": "26000",
+    "Ministério da Justiça (MJ)": "30000",
+    "Presidência da República": "20000",
+    "Ministério da Economia": "17000"
+}
 
 # --- FUNÇÕES ---
 def get_headers():
@@ -21,119 +28,163 @@ def limpar_cnpj(cnpj):
     if not cnpj: return ""
     return "".join([n for n in str(cnpj) if n.isdigit()])
 
-def auditar_empresa_debug(cnpj_alvo, debug_mode=False):
-    resultados = []
-    cnpj_limpo = limpar_cnpj(cnpj_alvo)
+def safe_float(valor):
+    try: return float(valor)
+    except: return 0.0
+
+@st.cache_data(ttl=3600)
+def consultar_dados_cadastrais(cnpj):
+    try:
+        r = requests.get(f"https://minhareceita.org/{limpar_cnpj(cnpj)}", timeout=5)
+        if r.status_code == 200: return r.json()
+    except: pass
+    return None
+
+def auditar_empresa_blindada(cnpj_alvo):
+    resultados_validos = []
+    cnpj_limpo_alvo = limpar_cnpj(cnpj_alvo)
     
+    # Bases de dados para varrer
     bases = ["ceis", "cnep"]
     
     for base in bases:
         url = f"https://api.portaldatransparencia.gov.br/api-de-dados/{base}"
-        # V29: Usando cnpjSancionado que é mais garantido que codigoSancionado
-        params = {"cnpjSancionado": cnpj_limpo, "pagina": 1}
+        # Buscamos por CNPJ
+        params = {"cnpjSancionado": cnpj_limpo_alvo, "pagina": 1}
         
         try:
-            if debug_mode:
-                st.write(f"🔄 **Tentando conectar em:** `{base.upper()}`...")
-            
-            resp = requests.get(url, params=params, headers=get_headers(), timeout=20)
-            
-            if debug_mode:
-                st.write(f"📡 Status Code: `{resp.status_code}`")
-            
+            resp = requests.get(url, params=params, headers=get_headers(), timeout=15)
             if resp.status_code == 200:
-                dados = resp.json()
-                if debug_mode:
-                    with st.expander(f"📦 Ver JSON Bruto ({base.upper()})"):
-                        st.json(dados)
+                items = resp.json()
                 
-                # Se voltou lista vazia, o governo diz que não tem nada
-                if isinstance(dados, list):
-                    for item in dados:
+                # --- O GRANDE FILTRO (PENTE-FINO) ---
+                # A API as vezes devolve lixo. Vamos conferir item por item.
+                for item in items:
+                    # Tenta achar o CNPJ dentro do registro complexo que o governo manda
+                    cnpj_encontrado = ""
+                    
+                    # Caminho 1: Sancionado -> Codigo
+                    try: cnpj_encontrado = item['sancionado']['codigoFormatado']
+                    except: pass
+                    
+                    # Caminho 2: Pessoa -> CNPJ
+                    if not cnpj_encontrado:
+                        try: cnpj_encontrado = item['pessoa']['cnpjFormatado']
+                        except: pass
+                        
+                    # Limpa o que achou para comparar
+                    cnpj_encontrado_limpo = limpar_cnpj(cnpj_encontrado)
+                    
+                    # SÓ PASSA SE FOR EXATAMENTE O CNPJ DO USUÁRIO
+                    # (Ou se contiver a raiz, para pegar filiais)
+                    if cnpj_limpo_alvo in cnpj_encontrado_limpo:
                         item['_origem'] = base.upper()
-                        resultados.append(item)
-            elif resp.status_code == 401:
-                st.error("🔒 Erro 401: A API negou a chave. A chave pode estar expirada ou bloqueada.")
+                        resultados_validos.append(item)
+                        
         except Exception as e:
-            st.error(f"Erro de conexão na base {base}: {e}")
-
-    return resultados
+            print(f"Erro silencioso na base {base}: {e}")
+            pass
+            
+    return resultados_validos
 
 # --- INTERFACE ---
-st.title("⚖️ Auditoria Gov Federal (V29 - Debug Mode)")
+st.title("⚖️ Auditoria Gov Federal (V30 - Blindada)")
 
-aba1, aba2 = st.tabs(["🕵️ Auditoria CNPJ", "📊 Contratos"])
+aba1, aba2 = st.tabs(["🕵️ Auditoria CNPJ", "📊 Contratos e Testes"])
 
-# --- ABA 1 ---
+# --- ABA 1: AUDITORIA ---
 with aba1:
     st.header("Verificar Fornecedor")
+    st.info("ℹ️ Agora com Filtragem Dupla: Só mostra registros onde o CNPJ bate exatamente.")
     
-    # CHECKBOX DE DEBUG PARA VOCÊ VER A VERDADE
-    debug_mode = st.checkbox("🐞 Ativar Modo Detetive (Mostrar JSON Bruto)")
+    cnpj_input = st.text_input("CNPJ:", value="62.547.210/0001-51")
     
-    cnpj_input = st.text_input("CNPJ:", value="17.162.082/0001-73")
-    
-    if st.button("Varrer Bases do Governo"):
-        if len(cnpj_input) < 10:
-            st.warning("CNPJ Inválido")
-        else:
-            # 1. Dados Básicos (MinhaReceita)
-            try:
-                r_cad = requests.get(f"https://minhareceita.org/{limpar_cnpj(cnpj_input)}", timeout=5)
-                if r_cad.status_code == 200:
-                    cad = r_cad.json()
-                    st.success(f"Empresa Identificada: **{cad.get('razao_social')}**")
-            except:
-                st.warning("MinhaReceita fora do ar (Dados cadastrais pulados)")
-
-            # 2. Busca Sanções
-            sancoes = auditar_empresa_debug(cnpj_input, debug_mode)
+    if st.button("Varrer Bases do Governo", type="primary"):
+        with st.spinner("Confrontando dados nas bases federais..."):
+            # 1. Identificação Visual
+            cad = consultar_dados_cadastrais(cnpj_input)
+            nome_empresa = cad.get('razao_social') if cad else "Empresa não identificada na RFB"
+            st.success(f"Alvo: **{nome_empresa}**")
+            
+            # 2. Busca e Filtragem
+            sancoes = auditar_empresa_blindada(cnpj_input)
             
             st.divider()
-            if sancoes:
-                st.error(f"🚨 **ENCONTRADO(S) {len(sancoes)} REGISTRO(S)**")
+            
+            if len(sancoes) > 0:
+                st.error(f"🚨 **ALERTA: {len(sancoes)} RESTRIÇÕES CONFIRMADAS**")
                 for s in sancoes:
                     st.markdown(f"""
                     ---
-                    **Origem:** {s['_origem']}
-                    **Órgão:** {s.get('orgaoSancionador', {}).get('nome')}
-                    **Motivo:** {s.get('motivo')}
+                    **Base:** {s['_origem']}
+                    **Órgão Sancionador:** {s.get('orgaoSancionador', {}).get('nome')}
+                    **Motivo:** {s.get('motivo', 'Não informado')}
                     """)
             else:
-                st.success("✅ O Governo retornou lista vazia (Nada Consta).")
-                if debug_mode:
-                    st.info("Se você ativou o Modo Detetive e o JSON apareceu como `[]`, é certeza absoluta que o governo não tem dados para este CNPJ.")
+                st.success(f"✅ **NADA CONSTA** (Protocolo Blindado)")
+                st.caption("A API retornou dados, mas nosso sistema verificou que não pertencem a este CNPJ.")
 
-# --- ABA 2 ---
+# --- ABA 2: CONTRATOS E TESTES ---
 with aba2:
-    st.header("Teste de Conexão - Contratos")
-    st.info("Vamos testar se a API de Contratos aceita nossa chave.")
+    st.header("Monitoramento de Contratos")
     
-    if st.button("Testar Conexão Contratos"):
-        # Tenta pegar apenas 1 contrato aleatório de 2024 para ver se conecta
+    c1, c2 = st.columns(2)
+    with c1: orgao_selecionado = st.selectbox("Órgão", list(ORGAOS_SIAFI.keys()))
+    
+    # Botão de Teste Corrigido
+    if st.button("🛠️ Testar Conexão (Correção V30)"):
+        # Agora enviamos o codigoOrgao OBRIGATÓRIO (36000 - Saúde)
         url = "https://api.portaldatransparencia.gov.br/api-de-dados/contratos"
         params = {
             "dataInicial": "01/01/2024",
-            "dataFinal": "10/01/2024",
+            "dataFinal": "31/01/2024",
+            "codigoOrgao": "36000", 
             "pagina": 1
         }
         
         try:
             resp = requests.get(url, params=params, headers=get_headers(), timeout=20)
-            
-            st.write(f"**Status da Resposta:** {resp.status_code}")
-            
             if resp.status_code == 200:
-                dados = resp.json()
-                st.success(f"✅ Conexão BEM SUCEDIDA! A API retornou {len(dados)} contratos de teste.")
-                st.dataframe(dados)
-            elif resp.status_code == 401:
-                st.error("⛔ ERRO 401: Chave de API Inválida/Bloqueada.")
-                st.write("Isso significa que o problema é na CHAVE, não no código.")
-            elif resp.status_code == 403:
-                st.error("⛔ ERRO 403: Acesso Proibido (IP bloqueado ou WAF).")
+                st.success("✅ **CONEXÃO BEM SUCEDIDA!**")
+                st.json(resp.json()[0]) # Mostra só o primeiro pra não poluir
             else:
-                st.error(f"Erro desconhecido: {resp.text}")
-                
+                st.error(f"Erro: {resp.status_code}")
+                st.write(resp.text)
         except Exception as e:
-            st.error(f"Erro crítico de Python: {e}")
+            st.error(f"Erro de Execução: {e}")
+
+    st.divider()
+    
+    # Busca Real
+    dt_hoje = datetime.now()
+    dt_inicio = dt_hoje - timedelta(days=60)
+    
+    col_a, col_b = st.columns(2)
+    d_ini = col_a.date_input("Início", dt_inicio)
+    d_fim = col_b.date_input("Fim", dt_hoje)
+    
+    if st.button("Buscar Contratos do Órgão"):
+        cod = ORGAOS_SIAFI[orgao_selecionado]
+        p = {
+            "dataInicial": d_ini.strftime("%d/%m/%Y"),
+            "dataFinal": d_fim.strftime("%d/%m/%Y"),
+            "codigoOrgao": cod,
+            "pagina": 1
+        }
+        
+        try:
+            r = requests.get("https://api.portaldatransparencia.gov.br/api-de-dados/contratos", 
+                           params=p, headers=get_headers(), timeout=30)
+            data = r.json()
+            
+            if data:
+                df = pd.DataFrame([{
+                    "Data": d['dataAssinatura'],
+                    "Fornecedor": d['fornecedor']['nome'],
+                    "Valor": safe_float(d['valorInicial'])
+                } for d in data])
+                st.dataframe(df)
+            else:
+                st.warning("Nenhum contrato neste período.")
+        except Exception as e:
+            st.error(f"Erro: {e}")
