@@ -11,15 +11,28 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- CSS (VISUAL) ---
+# --- CSS (CORREÇÕES VISUAIS V44) ---
 st.markdown("""
     <style>
+        /* Espaçamento superior */
         .block-container {padding-top: 2rem;}
+        
+        /* Esconder menus do Streamlit */
         #MainMenu {visibility: hidden;}
         footer {visibility: hidden;}
         
-        /* Ajuste fino para tabelas */
-        .stDataFrame {font-size: 0.9rem;}
+        /* CORREÇÃO 1: Alinhar botão de Auditar com o input de texto */
+        [data-testid="column"]:nth-child(2) div[data-testid="stVerticalBlock"] > div:has(button) {
+            display: flex;
+            align-items: flex-end;
+            height: 100%;
+        }
+        /* Ajuste fino para ficar na mesma linha de base */
+        [data-testid="column"]:nth-child(2) button {
+            margin-bottom: 2px; 
+        }
+
+        /* CORREÇÃO 2: Removido o CSS que deixava as métricas brancas e bugadas no dark mode */
     </style>
 """, unsafe_allow_html=True)
 
@@ -47,14 +60,6 @@ def limpar_string(texto):
 def safe_float(valor):
     try: return float(valor)
     except: return 0.0
-
-def formatar_data_br(data_iso):
-    # Transforma 2024-12-25 em 25/12/2024
-    if not data_iso: return ""
-    try:
-        obj = datetime.strptime(data_iso, "%Y-%m-%d")
-        return obj.strftime("%d/%m/%Y")
-    except: return data_iso
 
 @st.cache_data(ttl=3600)
 def auditar_cnpj_detalhado(cnpj_alvo):
@@ -101,9 +106,9 @@ def buscar_contratos(codigo_orgao):
     lista = []
     dt_fim = datetime.now()
     dt_ini = dt_fim - timedelta(days=730)
-    bar = st.progress(0, text="Conectando ao Portal da Transparência...")
+    bar = st.progress(0, text="Iniciando conexão...")
     for i, pag in enumerate(range(1, 4)):
-        bar.progress((i+1)*33, text=f"Buscando página {pag} de contratos...")
+        bar.progress((i+1)*33, text=f"Baixando página {pag} de contratos...")
         try:
             params = {
                 "dataInicial": dt_ini.strftime("%d/%m/%Y"), "dataFinal": dt_fim.strftime("%d/%m/%Y"),
@@ -129,18 +134,12 @@ aba1, aba2 = st.tabs(["🕵️ Análise de Risco (CNPJ)", "💰 Monitor de Contr
 # --- ABA 1: CNPJ ---
 with aba1:
     st.header("Verificar Fornecedor")
-    col1, col2 = st.columns([4, 1])
+    # Layout de colunas ajustado pelo CSS no início do código
+    col1, col2 = st.columns([4, 1]) 
+    cnpj_input = col1.text_input("CNPJ:", value="05.144.757/0001-72", placeholder="00.000.000/0000-00")
     
-    with col1:
-        cnpj_input = st.text_input("CNPJ:", value="05.144.757/0001-72", placeholder="00.000.000/0000-00")
-    
-    with col2:
-        # Truque do espaçamento para alinhar o botão com o input
-        st.write("") 
-        st.write("")
-        botao_auditar = st.button("🔍 Auditar", type="primary", use_container_width=True)
-    
-    if botao_auditar:
+    # Botão agora alinhado pelo CSS
+    if col2.button("🔍 Auditar", type="primary", use_container_width=True):
         with st.spinner("Analisando sanções..."):
             try:
                 r = requests.get(f"https://minhareceita.org/{limpar_string(cnpj_input)}", timeout=3)
@@ -167,12 +166,9 @@ with aba2:
     
     c_input, c_chk = st.columns([3, 1])
     orgao_nome = c_input.selectbox("Selecione o Órgão:", list(ORGAOS_SIAFI.keys()))
+    analisar_risco = c_chk.checkbox("Ativar Radar de Risco", value=True, help="Audita os 10 maiores fornecedores encontrados.")
     
-    # Checkbox renomeado para explicar o que faz
-    analisar_risco = c_chk.checkbox("Verificar Sanções (Lento)", value=True, help="Se marcado, o sistema verifica a 'ficha limpa' de cada fornecedor encontrado.")
-    
-    # Botão renomeado para "Buscar"
-    if st.button("🔎 Buscar Contratos"):
+    if st.button("📥 Baixar Dados"):
         cod = ORGAOS_SIAFI[orgao_nome]
         raw = buscar_contratos(cod)
         
@@ -186,19 +182,20 @@ with aba2:
                 
                 total += val
                 tabela.append({
-                    "Data": formatar_data_br(item.get('dataAssinatura')), # Data formatada BR
+                    "Data": item.get('dataAssinatura'),
                     "Valor (R$)": val,
-                    "Fornecedor": item.get('fornecedor', {}).get('nome', 'N/A')[:35],
+                    "Fornecedor": item.get('fornecedor', {}).get('nome', 'N/A')[:40],
                     "CNPJ": cnpj,
-                    "Objeto": item.get('objeto', '')[:90],
-                    "Situação": "⚪ N/A" 
+                    "Objeto": item.get('objeto', '')[:100],
+                    # CORREÇÃO 3: Nome da coluna alterado
+                    "Situação da Empresa": "⚪ N/A" 
                 })
             
             df = pd.DataFrame(tabela)
             
             # Análise de Risco (Top 10)
             if analisar_risco:
-                st.info("🔎 Verificando antecedentes criminais dos maiores fornecedores...")
+                st.info("🔎 Verificando antecedentes dos maiores contratos...")
                 df_sorted = df.sort_values("Valor (R$)", ascending=False)
                 top_cnpjs = df_sorted['CNPJ'].unique()[:10]
                 
@@ -209,23 +206,21 @@ with aba2:
                         status_cache[c] = "🔴 ALERTA" if is_sujo else "🟢 OK"
                         time.sleep(0.1)
                 
-                df['Situação'] = df['CNPJ'].map(status_cache).fillna("⚪ N/A")
-
-            # REORDENAR COLUNAS: Situação ao lado do CNPJ
-            colunas_ordem = ["Data", "Valor (R$)", "Fornecedor", "CNPJ", "Situação", "Objeto"]
-            df = df[colunas_ordem]
+                # Mapeia usando o novo nome da coluna
+                df['Situação da Empresa'] = df['CNPJ'].map(status_cache).fillna("⚪ N/A")
 
             # Métricas
             k1, k2, k3 = st.columns(3)
             k1.metric("Total Gasto", f"R$ {total:,.2f}")
             k2.metric("Qtd. Contratos", len(df))
             if analisar_risco:
-                suspeitos = len(df[df['Situação'] == "🔴 ALERTA"])
+                # Conta usando o novo nome da coluna
+                suspeitos = len(df[df['Situação da Empresa'] == "🔴 ALERTA"])
                 k3.metric("Fornecedores Suspeitos", suspeitos, delta_color="inverse")
             
             # Botão CSV
             csv = df.to_csv(index=False).encode('utf-8')
-            st.download_button("💾 Download Planilha (CSV)", csv, "auditoria_gov.csv", "text/csv")
+            st.download_button("💾 Download CSV", csv, "auditoria_gov.csv", "text/csv")
             
             # Tabela Colorida
             def color_risk(val):
@@ -234,7 +229,8 @@ with aba2:
                 return ''
 
             st.dataframe(
-                df.style.applymap(color_risk, subset=['Situação']).format({"Valor (R$)": "R$ {:,.2f}"}),
+                # Aplica estilo e formatação na nova coluna
+                df.style.applymap(color_risk, subset=['Situação da Empresa']).format({"Valor (R$)": "R$ {:,.2f}"}),
                 use_container_width=True, hide_index=True
             )
         else:
