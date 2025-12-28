@@ -102,27 +102,26 @@ def checar_risco_simples(cnpj):
 
 # --- IA ---
 # --- Função de IA (MODO DEBUG E SEGURANÇA) ---
+# --- VERSÃO DE DEPURAÇÃO EXTREMA ---
 def analisar_objeto_ia(objeto_texto):
-    if not IA_ATIVA: return "IA NÃO CONFIGURADA"
-    if not objeto_texto: return "Texto Vazio"
+    # 1. Checa se a chave existe mesmo
+    if not GEMINI_KEY: 
+        return "ERRO: SEM CHAVE (Configure os Secrets)"
+    
+    if not objeto_texto: return "Vazio"
     
     try:
-        # Usando o modelo mais compatível e estável do Google (evita erro 404 e erro de cota baixa)
+        # Usando o modelo Pro que é mais compatível
         model = genai.GenerativeModel('gemini-pro')
         
-        prompt = f"""Analise o objeto deste contrato público e responda APENAS com uma destas palavras: 'ALTO', 'MÉDIO' ou 'BAIXO'.
-        Classifique como ALTO se for vago, genérico (ex: 'aquisição de materiais') ou suspeito.
-        Objeto: '{objeto_texto}'"""
+        # Chamada simples
+        response = model.generate_content(f"Classifique o risco (ALTO/MEDIO/BAIXO) do objeto: {objeto_texto}")
         
-        # Tenta gerar a resposta
-        response = model.generate_content(prompt)
         return response.text.strip().upper()
-    
-    except exceptions.ResourceExhausted:
-        return "COTA DIÁRIA EXCEDIDA"  # Agora sabemos se foi o limite
+
     except Exception as e:
-        # ISSO VAI MOSTRAR O ERRO REAL NA TABELA PARA GENTE SABER O QUE É
-        return f"ERRO: {str(e)}"
+        # AQUI ESTÁ O SEGREDOR: Vai imprimir o erro técnico exato na tabela
+        return f"ERRO TÉCNICO: {str(e)}"
     
 # --- BUSCA ---
 def buscar_contratos(codigo_orgao):
@@ -196,3 +195,24 @@ with aba2:
             # Exibição
             st.dataframe(df[['dataAssinatura', 'Valor', 'objeto', 'Risco IA', 'Status CNPJ']])
         else: st.warning("Sem dados.")
+
+        # --- DEBUG (COLE ISSO NO FINAL DO ARQUIVO PARA DESCOBRIR O ERRO) ---
+with st.sidebar:
+    st.header("🔧 Painel de Debug")
+    
+    # 1. Verifica se a chave foi carregada
+    if GEMINI_KEY:
+        st.success(f"Chave Gemini: Carregada ({GEMINI_KEY[:4]}...)")
+    else:
+        st.error("Chave Gemini: NÃO ENCONTRADA! Verifique os Secrets.")
+
+    # 2. Testa conexão real com o Google
+    if st.button("Testar Conexão IA"):
+        try:
+            # Teste rápido com modelo antigo (mais compatível)
+            model_test = genai.GenerativeModel('gemini-pro')
+            res = model_test.generate_content("Teste")
+            st.success("✅ Conexão OK! A IA respondeu.")
+        except Exception as e:
+            st.error(f"❌ Falha na conexão: {e}")
+            st.code(str(e)) # Mostra o erro técnico completo
