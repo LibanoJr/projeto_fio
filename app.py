@@ -8,15 +8,15 @@ from dotenv import load_dotenv
 import google.generativeai as genai
 from google.api_core import exceptions
 
-# ================= CONFIG =================
+# --- CONFIG ---
 load_dotenv()
 
-def get_secret(key):
-    v = os.getenv(key)
-    if v:
-        return v
-    if key in st.secrets:
-        return st.secrets[key]
+def get_secret(key_name):
+    val = os.getenv(key_name)
+    if val:
+        return val
+    if key_name in st.secrets:
+        return st.secrets[key_name]
     return None
 
 PORTAL_KEY = get_secret("PORTAL_KEY")
@@ -28,11 +28,11 @@ if GEMINI_KEY:
         genai.configure(api_key=GEMINI_KEY)
         IA_ATIVA = True
     except:
-        IA_ATIVA = False
+        pass
 
 st.set_page_config(page_title="GovAudit Pro", page_icon="⚖️", layout="wide")
 
-# ================= CSS =================
+# --- CSS ---
 st.markdown("""
 <style>
 .block-container {padding-top: 2rem;}
@@ -42,9 +42,9 @@ footer {visibility: hidden;}
 </style>
 """, unsafe_allow_html=True)
 
-# ================= UTIL =================
-def limpar_num(v):
-    return "".join(c for c in str(v) if c.isdigit())
+# --- UTIL ---
+def limpar_string(t):
+    return "".join(c for c in str(t) if c.isdigit())
 
 def safe_float(v):
     try:
@@ -63,7 +63,7 @@ def formatar_data(d):
     except:
         return d
 
-# ================= ORGÃOS (COMPLETOS) =================
+# --- ORGÃOS (COMPLETOS) ---
 ORGAOS_SIAFI = {
     "Secretaria-Geral da Presidência da República (Planalto)": "20101",
     "Ministério da Saúde": "36000",
@@ -74,25 +74,26 @@ ORGAOS_SIAFI = {
     "Comando do Exército": "52121"
 }
 
-# ================= HEADERS =================
+# --- HEADERS ---
 def get_headers():
     return {"chave-api-dados": PORTAL_KEY, "Accept": "application/json"}
 
-# ================= CNPJ DETALHADO =================
+# ======================
+# 🔒 CNPJ — IGUAL AO BACKUP (NÃO MEXIDO)
+# ======================
 @st.cache_data(ttl=3600)
-def auditar_cnpj_detalhado(cnpj):
+def auditar_cnpj_detalhado(cnpj_alvo):
     resultados = []
     if not PORTAL_KEY:
         return []
 
-    cnpj_limpo = limpar_num(cnpj)
-    if len(cnpj_limpo) != 14:
-        return []
+    cnpj_limpo = limpar_string(cnpj_alvo)
+    raiz_alvo = cnpj_limpo[:8]
 
     bases = {
-        "ceis": "Cadastro de Inidôneos (CEIS)",
-        "cnep": "Cadastro de Empresas Punidas (CNEP)",
-        "acordos-leniencia": "Acordos de Leniência"
+        "acordos-leniencia": "Acordo Leniência",
+        "ceis": "Inidôneos (CEIS)",
+        "cnep": "Punidos (CNEP)"
     }
 
     for endpoint, nome_base in bases.items():
@@ -101,45 +102,56 @@ def auditar_cnpj_detalhado(cnpj):
                 f"https://api.portaldatransparencia.gov.br/api-de-dados/{endpoint}",
                 params={"cnpjSancionado": cnpj_limpo, "pagina": 1},
                 headers=get_headers(),
-                timeout=6
+                timeout=5
             )
             if r.status_code == 200:
                 for item in r.json():
-                    item["_origem"] = nome_base
-                    resultados.append(item)
+                    cnpj_item = ""
+                    try:
+                        sanc = item.get("sancionado", {})
+                        cnpj_item = sanc.get("codigoFormatado") or ""
+                    except:
+                        pass
+
+                    if cnpj_item and limpar_string(cnpj_item)[:8] == raiz_alvo:
+                        item["_origem"] = nome_base
+                        resultados.append(item)
         except:
             pass
 
     return resultados
 
-# ================= RISCO =================
+def checar_risco_simples(cnpj):
+    return True if auditar_cnpj_detalhado(cnpj) else False
+
+# ======================
+# RISCO (IA + FALLBACK)
+# ======================
 def risco_heuristico(texto):
     t = texto.lower()
     if len(t) < 60:
         return "ALTO"
-    if any(x in t for x in ["prestação de serviços", "consultoria", "apoio técnico", "assessoria"]):
+    if any(x in t for x in ["prestação de serviços", "consultoria", "assessoria", "apoio técnico"]):
         return "MÉDIO"
     return "BAIXO"
 
-def risco_ia_com_fallback(texto):
-    if not texto:
-        return "ALTO"
-
-    if IA_ATIVA:
+def analisar_objeto(obj):
+    if IA_ATIVA and obj:
         try:
             model = genai.GenerativeModel("gemini-2.0-flash")
             r = model.generate_content(
-                f"Classifique o risco do contrato. Responda apenas ALTO, MÉDIO ou BAIXO.\nObjeto: {texto}"
+                f"Classifique o risco do contrato em ALTO, MÉDIO ou BAIXO.\nObjeto: {obj}"
             )
             resp = r.text.strip().upper()
             if resp in ["ALTO", "MÉDIO", "BAIXO"]:
                 return resp
         except:
             pass
+    return risco_heuristico(obj)
 
-    return risco_heuristico(texto)
-
-# ================= CONTRATOS =================
+# ======================
+# CONTRATOS
+# ======================
 def buscar_contratos(orgao):
     lista = []
     fim = datetime.now()
@@ -168,75 +180,70 @@ def buscar_contratos(orgao):
     bar.empty()
     return lista
 
-# ================= INTERFACE =================
+# ======================
+# INTERFACE
+# ======================
 st.title("🛡️ GovAudit Pro")
 
 aba_auditoria, aba_cnpj = st.tabs([
     "📊 Auditoria Contratual",
-    "🕵️ Checagem de CNPJ"
+    "🕵️ Checagem CNPJ"
 ])
 
-# ================= AUDITORIA =================
 with aba_auditoria:
     orgao = st.selectbox("Órgão:", ORGAOS_SIAFI.keys())
 
     if st.button("Auditar"):
         contratos = buscar_contratos(ORGAOS_SIAFI[orgao])
-
-        contratos.sort(
-            key=lambda x: safe_float(x.get("valorInicialCompra") or x.get("valorFinalCompra")),
-            reverse=True
-        )
+        contratos.sort(key=lambda x: safe_float(x.get("valorInicialCompra") or x.get("valorFinalCompra")), reverse=True)
 
         top10 = contratos[:10]
         tabela = []
         total = 0
 
-        for c in contratos:
+        bar = st.progress(0, text="Analisando...")
+        for i, c in enumerate(contratos):
             valor = safe_float(c.get("valorInicialCompra") or c.get("valorFinalCompra"))
             total += valor
 
             forn = c.get("fornecedor", {})
             nome = forn.get("nome", "")
             cnpj = forn.get("cnpjFormatado", "")
-            objeto = c.get("objeto", "")[:150]
+            obj = c.get("objeto", "")[:150]
 
             risco = ""
             status = ""
 
             if c in top10:
-                risco = risco_ia_com_fallback(objeto)
-                status = "🚨 ALERTA" if auditar_cnpj_detalhado(cnpj) else "🟢 OK"
+                risco = analisar_objeto(obj)
+                status = "🚨 ALERTA" if checar_risco_simples(cnpj) else "🟢 OK"
 
             tabela.append({
                 "Data": formatar_data(c.get("dataAssinatura")),
                 "Empresa": nome,
                 "CNPJ": cnpj,
                 "Valor": formatar_moeda(valor),
-                "Objeto": objeto,
+                "Objeto": obj,
                 "Risco": risco,
                 "Status CNPJ": status
             })
 
+            bar.progress((i + 1) / len(contratos))
+        bar.empty()
+
         df = pd.DataFrame(tabela)
-
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Total", formatar_moeda(total))
-        c2.metric("Contratos", len(contratos))
-        c3.metric("Riscos Altos", len(df[df["Risco"] == "ALTO"]))
-
+        st.metric("Total Analisado", formatar_moeda(total))
         st.dataframe(df, use_container_width=True)
 
-# ================= CNPJ =================
 with aba_cnpj:
-    st.header("Checagem de CNPJ")
-    cnpj_input = st.text_input("CNPJ:")
+    st.header("Antecedentes do Fornecedor")
+    cnpj_input = st.text_input("CNPJ Alvo:")
 
     if st.button("Verificar"):
         res = auditar_cnpj_detalhado(cnpj_input)
         if res:
-            st.error(f"🚨 {len(res)} OCORRÊNCIA(S) ENCONTRADA(S)")
+            st.error(f"🚨 {len(res)} SANÇÕES ENCONTRADAS")
             for r in res:
-                st.write(f"• {r['_origem']}")
+                st.write(f"❌ {r['_origem']}")
         else:
-            st.success("🟢 NADA CONSTA")
+            st.success("✅ NADA CONSTA")
