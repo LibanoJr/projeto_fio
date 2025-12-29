@@ -192,23 +192,27 @@ with aba1:
     st.header("Consulta de Empresa")
 
     cnpj_input = st.text_input("CNPJ:")
-    buscar = st.button("Buscar CNPJ")
 
-    if buscar:
-        st.divider()
+    if "resultado_cnpj" not in st.session_state:
+        st.session_state.resultado_cnpj = None
 
+    if st.button("Buscar"):
         cnpj_limpo = limpar_cnpj(cnpj_input)
         nome = buscar_empresa_cnpj(cnpj_input)
 
-        st.write(f"🏢 **Empresa:** {nome}")
+        if len(cnpj_limpo) == 14 and checar_sancoes(cnpj_limpo):
+            status = "🚨 Sanções encontradas"
+        else:
+            status = "🟢 Nada consta"
 
-        resultado = "🟢 Nada consta"
+        st.session_state.resultado_cnpj = {
+            "nome": nome,
+            "status": status
+        }
 
-        if len(cnpj_limpo) == 14:
-            if checar_sancoes(cnpj_limpo):
-                resultado = "🚨 Sanções encontradas"
-
-        st.markdown(f"### {resultado}")
+    if st.session_state.resultado_cnpj:
+        st.write(f"🏢 **Empresa:** {st.session_state.resultado_cnpj['nome']}")
+        st.markdown(f"### {st.session_state.resultado_cnpj['status']}")
 
 with aba2:
     st.header("Análise de Contratos")
