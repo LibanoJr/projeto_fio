@@ -55,8 +55,10 @@ def safe_float(v):
 # ================= CNPJ (BRASILAPI) =================
 def buscar_empresa_cnpj(cnpj):
     try:
-        url = f"https://brasilapi.com.br/api/cnpj/v1/{limpar_cnpj(cnpj)}"
-        r = requests.get(url, timeout=6)
+        r = requests.get(
+            f"https://brasilapi.com.br/api/cnpj/v1/{limpar_cnpj(cnpj)}",
+            timeout=8
+        )
         if r.status_code == 200:
             j = r.json()
             return j.get("razao_social") or j.get("nome_fantasia")
@@ -64,7 +66,7 @@ def buscar_empresa_cnpj(cnpj):
         pass
     return "Nome não informado nesta base"
 
-# ================= SANÇÕES =================
+# ================= SANÇÕES (CORRIGIDO) =================
 def get_headers():
     return {"chave-api-dados": PORTAL_KEY, "Accept": "application/json"}
 
@@ -127,17 +129,16 @@ def checar_sancoes(cnpj):
                 break
 
     return False
-# ================= RISCO HEURÍSTICO =================
+
+# ================= RISCO =================
 def risco_heuristico(texto):
     t = texto.lower()
-    genericos = ["prestação de serviços", "apoio técnico", "assessoria", "consultoria"]
     if len(t) < 60:
         return "ALTO"
-    if any(g in t for g in genericos):
+    if any(p in t for p in ["prestação de serviços", "consultoria", "assessoria"]):
         return "MÉDIO"
     return "BAIXO"
 
-# ================= RISCO IA =================
 def risco_ia(texto):
     if not IA_ATIVA or not texto:
         return None
@@ -197,26 +198,33 @@ with aba1:
 
         st.write(f"🏢 **Empresa:** {nome}")
 
-        # 🔒 REGRA FINAL: só verifica sanção se for CNPJ (14 dígitos)
         if len(cnpj_limpo) != 14:
-            st.success("🟢 Nada consta (pessoa física ou identificador inválido)")
+            st.success("🟢 Nada consta")
         else:
             if checar_sancoes(cnpj_limpo):
                 st.error("🚨 Sanções encontradas")
             else:
                 st.success("🟢 Nada consta")
+
 with aba2:
     st.header("Análise de Contratos")
+
     ORGAOS = {
-        "Planalto": "20101",
+        "Secretaria-Geral da Presidência": "20101",
         "Ministério da Saúde": "36000",
-        "Ministério da Educação": "26000"
+        "Ministério da Educação": "26000",
+        "Ministério da Justiça": "30000",
+        "Polícia Federal": "30108",
     }
+
     orgao = st.selectbox("Órgão:", ORGAOS.keys())
 
     if st.button("Auditar"):
         contratos = buscar_contratos(ORGAOS[orgao])
-        contratos.sort(key=lambda x: safe_float(x.get("valorInicialCompra") or x.get("valorFinalCompra")), reverse=True)
+        contratos.sort(
+            key=lambda x: safe_float(x.get("valorInicialCompra") or x.get("valorFinalCompra")),
+            reverse=True
+        )
 
         top10 = contratos[:10]
         tabela = []
@@ -226,6 +234,7 @@ with aba2:
         for i, c in enumerate(contratos):
             valor = safe_float(c.get("valorInicialCompra") or c.get("valorFinalCompra"))
             total += valor
+
             fornecedor = c.get("fornecedor", {})
             nome = fornecedor.get("nome", "")
             cnpj = fornecedor.get("cnpjFormatado", "")
@@ -247,9 +256,11 @@ with aba2:
                 "Risco": risco,
                 "Status CNPJ": status
             })
+
             bar.progress((i + 1) / len(contratos))
 
         bar.empty()
+
         df = pd.DataFrame(tabela)
 
         c1, c2, c3 = st.columns(3)
