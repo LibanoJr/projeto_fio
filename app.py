@@ -161,7 +161,7 @@ def buscar_contratos(codigo_orgao):
 # --- INTERFACE PRINCIPAL ---
 st.title("🛡️ Auditoria Gov Federal + IA (Gemini 2.0)")
 
-aba1, aba2 = st.tabs(["🕵️ Checagem CNPJ", "📊 Auditoria Contratual"])
+aba2, aba1 = st.tabs(["📊 Auditoria Contratual", "🕵️ Checagem CNPJ"])
 
 with aba1:
     st.header("Antecedentes do Fornecedor")
