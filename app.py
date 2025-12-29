@@ -190,21 +190,25 @@ aba1, aba2 = st.tabs(["🕵️ Checagem CNPJ", "📊 Auditoria Contratual"])
 
 with aba1:
     st.header("Consulta de Empresa")
-    cnpj_input = st.text_input("CNPJ:")
 
-    if st.button("Buscar"):
+    cnpj_input = st.text_input("CNPJ:")
+    buscar = st.button("Buscar CNPJ")
+
+    if buscar:
+        st.divider()
+
         cnpj_limpo = limpar_cnpj(cnpj_input)
         nome = buscar_empresa_cnpj(cnpj_input)
 
         st.write(f"🏢 **Empresa:** {nome}")
 
-        if len(cnpj_limpo) != 14:
-            st.success("🟢 Nada consta")
-        else:
+        resultado = "🟢 Nada consta"
+
+        if len(cnpj_limpo) == 14:
             if checar_sancoes(cnpj_limpo):
-                st.error("🚨 Sanções encontradas")
-            else:
-                st.success("🟢 Nada consta")
+                resultado = "🚨 Sanções encontradas"
+
+        st.markdown(f"### {resultado}")
 
 with aba2:
     st.header("Análise de Contratos")
