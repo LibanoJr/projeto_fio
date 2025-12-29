@@ -69,23 +69,52 @@ def get_headers():
     return {"chave-api-dados": PORTAL_KEY, "Accept": "application/json"}
 
 def checar_sancoes(cnpj):
-    if not PORTAL_KEY:
+    if not PORTAL_KEY or not cnpj:
         return False
+
+    cnpj_limpo = limpar_cnpj(cnpj)
     bases = ["ceis", "cnep", "acordos-leniencia"]
-    for b in bases:
+
+    for base in bases:
         try:
             r = requests.get(
-                f"https://api.portaldatransparencia.gov.br/api-de-dados/{b}",
-                params={"cnpjSancionado": limpar_cnpj(cnpj), "pagina": 1},
+                f"https://api.portaldatransparencia.gov.br/api-de-dados/{base}",
+                params={"cnpjSancionado": cnpj_limpo, "pagina": 1},
                 headers=get_headers(),
-                timeout=5
+                timeout=6
             )
-            if r.status_code == 200 and r.json():
-                return True
+
+            if r.status_code != 200:
+                continue
+
+            for item in r.json():
+                sanc = item.get("sancionado") or item.get("pessoa") or {}
+                cnpj_api = limpar_cnpj(sanc.get("codigoFormatado") or sanc.get("cnpjFormatado"))
+
+                # 1️⃣ CNPJ precisa bater exatamente
+                if cnpj_api != cnpj_limpo:
+                    continue
+
+                # 2️⃣ Verifica vigência
+                fim = (
+                    item.get("dataFimSancao")
+                    or item.get("dataFinal")
+                    or item.get("fimVigencia")
+                )
+
+                if not fim:
+                    return True  # sanção ativa sem data final
+
+                try:
+                    if datetime.strptime(fim, "%Y-%m-%d") >= datetime.now():
+                        return True
+                except:
+                    pass
+
         except:
             pass
-    return False
 
+    return False
 # ================= RISCO HEURÍSTICO =================
 def risco_heuristico(texto):
     t = texto.lower()
