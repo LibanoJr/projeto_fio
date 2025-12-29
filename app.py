@@ -6,6 +6,12 @@ import time
 import os
 from dotenv import load_dotenv
 import google.generativeai as genai
+import google.generativeai as genai
+
+# --- CÓDIGO DE DIAGNÓSTICO (Remova depois) ---
+st.sidebar.error(f"Versão da Lib Google instalada: {genai.__version__}")
+# Se aparecer um número menor que 0.7.0 (ex: 0.3.2), O SERVIDOR ESTÁ DESATUALIZADO.
+# ---------------------------------------------
 from google.api_core import exceptions
 
 # --- 1. CONFIGURAÇÃO ---
