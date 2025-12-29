@@ -120,7 +120,7 @@ def analisar_objeto_ia(objeto_texto):
     if not objeto_texto: return "Vazio"
     
     try:
-        # AQUI ESTAVA O ERRO: Mudamos para o modelo que você TEM acesso
+        # AQUI ESTÁ A CORREÇÃO: Usando o modelo que apareceu na sua lista
         model = genai.GenerativeModel('gemini-2.0-flash')
         
         prompt = f"""Analise este objeto de contrato público. Responda APENAS com uma destas palavras: 'ALTO', 'MÉDIO' ou 'BAIXO'.
@@ -133,13 +133,8 @@ def analisar_objeto_ia(objeto_texto):
     except exceptions.ResourceExhausted:
         return "COTA EXCEDIDA"
     except Exception as e:
-        # Se o 2.0 falhar, tentamos o experimental (Fallback)
-        try:
-            model = genai.GenerativeModel('gemini-2.0-flash-exp')
-            response = model.generate_content(f"Risco (ALTO/MEDIO/BAIXO) para: {objeto_texto}")
-            return response.text.strip().upper()
-        except:
-            return f"ERRO"
+        # Se der erro, mostra o erro técnico
+        return f"ERRO: {str(e)[:20]}..."
 
 # --- BUSCA CONTRATOS ---
 def buscar_contratos(codigo_orgao):
@@ -206,7 +201,7 @@ with aba2:
                 risco_ia = "..."
                 if usar_ia:
                     risco_ia = analisar_objeto_ia(obj)
-                    time.sleep(1) # Importante para não bloquear
+                    time.sleep(1) 
                 
                 status_cnpj = "🟢 OK"
                 if cnpj and checar_risco_simples(cnpj): status_cnpj = "🚨 ALERTA"
