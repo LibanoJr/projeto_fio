@@ -63,33 +63,54 @@ def formatar_data(d):
     except:
         return d
 
-# ================= CNPJ / SANÇÕES =================
+# ================= ORGÃOS (COMPLETOS) =================
+ORGAOS_SIAFI = {
+    "Secretaria-Geral da Presidência da República (Planalto)": "20101",
+    "Ministério da Saúde": "36000",
+    "Ministério da Educação": "26000",
+    "Ministério da Justiça e Segurança Pública": "30000",
+    "Departamento Nacional de Infraestrutura de Transportes (DNIT)": "39252",
+    "Polícia Federal": "30108",
+    "Comando do Exército": "52121"
+}
+
+# ================= HEADERS =================
 def get_headers():
     return {"chave-api-dados": PORTAL_KEY, "Accept": "application/json"}
 
+# ================= CNPJ DETALHADO =================
 @st.cache_data(ttl=3600)
-def checar_sancoes(cnpj):
+def auditar_cnpj_detalhado(cnpj):
+    resultados = []
     if not PORTAL_KEY:
-        return False
+        return []
 
     cnpj_limpo = limpar_num(cnpj)
     if len(cnpj_limpo) != 14:
-        return False
+        return []
 
-    bases = ["ceis", "cnep", "acordos-leniencia"]
-    for base in bases:
+    bases = {
+        "ceis": "Cadastro de Inidôneos (CEIS)",
+        "cnep": "Cadastro de Empresas Punidas (CNEP)",
+        "acordos-leniencia": "Acordos de Leniência"
+    }
+
+    for endpoint, nome_base in bases.items():
         try:
             r = requests.get(
-                f"https://api.portaldatransparencia.gov.br/api-de-dados/{base}",
+                f"https://api.portaldatransparencia.gov.br/api-de-dados/{endpoint}",
                 params={"cnpjSancionado": cnpj_limpo, "pagina": 1},
                 headers=get_headers(),
                 timeout=6
             )
-            if r.status_code == 200 and r.json():
-                return True
+            if r.status_code == 200:
+                for item in r.json():
+                    item["_origem"] = nome_base
+                    resultados.append(item)
         except:
             pass
-    return False
+
+    return resultados
 
 # ================= RISCO =================
 def risco_heuristico(texto):
@@ -101,7 +122,6 @@ def risco_heuristico(texto):
     return "BAIXO"
 
 def risco_ia_com_fallback(texto):
-    # REGRA DE OURO: nunca retorna vazio
     if not texto:
         return "ALTO"
 
@@ -117,14 +137,10 @@ def risco_ia_com_fallback(texto):
         except:
             pass
 
-    # fallback garantido
     return risco_heuristico(texto)
 
 # ================= CONTRATOS =================
 def buscar_contratos(orgao):
-    if not PORTAL_KEY:
-        return []
-
     lista = []
     fim = datetime.now()
     ini = fim - timedelta(days=730)
@@ -162,69 +178,54 @@ aba_auditoria, aba_cnpj = st.tabs([
 
 # ================= AUDITORIA =================
 with aba_auditoria:
-    ORGAOS = {
-        "Planalto": "20101",
-        "Ministério da Saúde": "36000",
-        "Ministério da Educação": "26000",
-        "Ministério da Justiça": "30000",
-        "Polícia Federal": "30108"
-    }
-
-    orgao = st.selectbox("Órgão:", ORGAOS.keys())
+    orgao = st.selectbox("Órgão:", ORGAOS_SIAFI.keys())
 
     if st.button("Auditar"):
-        contratos = buscar_contratos(ORGAOS[orgao])
+        contratos = buscar_contratos(ORGAOS_SIAFI[orgao])
 
-        if not contratos:
-            st.warning("Nenhum contrato encontrado.")
-        else:
-            contratos.sort(
-                key=lambda x: safe_float(x.get("valorInicialCompra") or x.get("valorFinalCompra")),
-                reverse=True
-            )
+        contratos.sort(
+            key=lambda x: safe_float(x.get("valorInicialCompra") or x.get("valorFinalCompra")),
+            reverse=True
+        )
 
-            top10 = contratos[:10]
-            tabela = []
-            total = 0
+        top10 = contratos[:10]
+        tabela = []
+        total = 0
 
-            bar = st.progress(0, text="Processando auditoria...")
-            for i, c in enumerate(contratos):
-                valor = safe_float(c.get("valorInicialCompra") or c.get("valorFinalCompra"))
-                total += valor
+        for c in contratos:
+            valor = safe_float(c.get("valorInicialCompra") or c.get("valorFinalCompra"))
+            total += valor
 
-                fornecedor = c.get("fornecedor", {})
-                nome = fornecedor.get("nome", "")
-                cnpj = fornecedor.get("cnpjFormatado", "")
-                objeto = c.get("objeto", "")[:150]
+            forn = c.get("fornecedor", {})
+            nome = forn.get("nome", "")
+            cnpj = forn.get("cnpjFormatado", "")
+            objeto = c.get("objeto", "")[:150]
 
-                risco = ""
-                status = ""
+            risco = ""
+            status = ""
 
-                if c in top10:
-                    risco = risco_ia_com_fallback(objeto)
-                    status = "🚨 ALERTA" if checar_sancoes(cnpj) else "🟢 OK"
+            if c in top10:
+                risco = risco_ia_com_fallback(objeto)
+                status = "🚨 ALERTA" if auditar_cnpj_detalhado(cnpj) else "🟢 OK"
 
-                tabela.append({
-                    "Data": formatar_data(c.get("dataAssinatura")),
-                    "Empresa": nome,
-                    "CNPJ": cnpj,
-                    "Valor": formatar_moeda(valor),
-                    "Objeto": objeto,
-                    "Risco": risco,
-                    "Status CNPJ": status
-                })
+            tabela.append({
+                "Data": formatar_data(c.get("dataAssinatura")),
+                "Empresa": nome,
+                "CNPJ": cnpj,
+                "Valor": formatar_moeda(valor),
+                "Objeto": objeto,
+                "Risco": risco,
+                "Status CNPJ": status
+            })
 
-                bar.progress((i + 1) / len(contratos))
+        df = pd.DataFrame(tabela)
 
-            bar.empty()
-            df = pd.DataFrame(tabela)
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Total", formatar_moeda(total))
+        c2.metric("Contratos", len(contratos))
+        c3.metric("Riscos Altos", len(df[df["Risco"] == "ALTO"]))
 
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Total", formatar_moeda(total))
-            c2.metric("Contratos", len(contratos))
-            c3.metric("Riscos Altos", len(df[df["Risco"] == "ALTO"]))
-
-            st.dataframe(df, use_container_width=True)
+        st.dataframe(df, use_container_width=True)
 
 # ================= CNPJ =================
 with aba_cnpj:
@@ -232,7 +233,10 @@ with aba_cnpj:
     cnpj_input = st.text_input("CNPJ:")
 
     if st.button("Verificar"):
-        if checar_sancoes(cnpj_input):
-            st.error("🚨 ALGUMA OCORRÊNCIA CONSTA")
+        res = auditar_cnpj_detalhado(cnpj_input)
+        if res:
+            st.error(f"🚨 {len(res)} OCORRÊNCIA(S) ENCONTRADA(S)")
+            for r in res:
+                st.write(f"• {r['_origem']}")
         else:
             st.success("🟢 NADA CONSTA")
