@@ -69,55 +69,62 @@ def get_headers():
     return {"chave-api-dados": PORTAL_KEY, "Accept": "application/json"}
 
 def checar_sancoes(cnpj):
-    if not PORTAL_KEY or not cnpj:
+    if not PORTAL_KEY:
         return False
 
     cnpj_limpo = limpar_cnpj(cnpj)
-
-    # 🔒 REGRA DE OURO: só CNPJ (14 dígitos)
     if len(cnpj_limpo) != 14:
         return False
 
     hoje = datetime.now().date()
-    bases = ["ceis", "cnep"]  # REMOVIDO acordos-leniencia (só PJ específica)
+    bases = ["ceis", "cnep"]
 
     for base in bases:
-        try:
-            r = requests.get(
-                f"https://api.portaldatransparencia.gov.br/api-de-dados/{base}",
-                params={"cnpjSancionado": cnpj_limpo, "pagina": 1},
-                headers=get_headers(),
-                timeout=6
-            )
+        pagina = 1
+        while True:
+            try:
+                r = requests.get(
+                    f"https://api.portaldatransparencia.gov.br/api-de-dados/{base}",
+                    params={
+                        "cnpjSancionado": cnpj_limpo,
+                        "pagina": pagina
+                    },
+                    headers=get_headers(),
+                    timeout=10
+                )
 
-            if r.status_code != 200:
-                continue
+                if r.status_code != 200:
+                    break
 
-            for item in r.json():
-                sanc = item.get("sancionado") or {}
-                cnpj_api = limpar_cnpj(sanc.get("codigoFormatado"))
+                dados = r.json()
+                if not dados:
+                    break
 
-                # CNPJ exato
-                if cnpj_api != cnpj_limpo:
-                    continue
+                for item in dados:
+                    sanc = item.get("sancionado") or {}
+                    cnpj_api = limpar_cnpj(sanc.get("codigoFormatado", ""))
 
-                inicio = item.get("dataInicioSancao")
-                fim = item.get("dataFimSancao")
+                    if cnpj_api != cnpj_limpo:
+                        continue
 
-                if not inicio or not fim:
-                    continue
+                    inicio = item.get("dataInicioSancao")
+                    fim = item.get("dataFimSancao")
 
-                try:
-                    dt_ini = datetime.strptime(inicio, "%Y-%m-%d").date()
-                    dt_fim = datetime.strptime(fim, "%Y-%m-%d").date()
-                except:
-                    continue
+                    if not inicio or not fim:
+                        continue
 
-                if dt_ini <= hoje <= dt_fim:
-                    return True
+                    try:
+                        dt_ini = datetime.strptime(inicio, "%Y-%m-%d").date()
+                        dt_fim = datetime.strptime(fim, "%Y-%m-%d").date()
+                    except:
+                        continue
 
-        except:
-            pass
+                    if dt_ini <= hoje <= dt_fim:
+                        return True
+
+                pagina += 1
+            except:
+                break
 
     return False
 # ================= RISCO HEURÍSTICO =================
