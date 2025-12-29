@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 import google.generativeai as genai
 from google.api_core import exceptions
 
-# ---------------- CONFIG ----------------
+# ================= CONFIG =================
 load_dotenv()
 
 def get_secret(k):
@@ -23,11 +23,11 @@ if GEMINI_KEY:
         genai.configure(api_key=GEMINI_KEY)
         IA_ATIVA = True
     except:
-        pass
+        IA_ATIVA = False
 
-st.set_page_config("GovAudit Pro", "⚖️", layout="wide")
+st.set_page_config(page_title="GovAudit Pro", page_icon="⚖️", layout="wide")
 
-# ---------------- UTILS ----------------
+# ================= UTILS =================
 def get_headers():
     return {"chave-api-dados": PORTAL_KEY, "Accept": "application/json"}
 
@@ -35,19 +35,23 @@ def limpar_string(t):
     return "".join(c for c in str(t) if c.isdigit())
 
 def safe_float(v):
-    try: return float(v)
-    except: return 0.0
+    try:
+        return float(v)
+    except:
+        return 0.0
 
 def moeda(v):
     return f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 def data_br(d):
-    try: return datetime.strptime(d, "%Y-%m-%d").strftime("%d/%m/%Y")
-    except: return ""
+    try:
+        return datetime.strptime(d, "%Y-%m-%d").strftime("%d/%m/%Y")
+    except:
+        return ""
 
-# ---------------- NOME EMPRESA ----------------
+# ================= NOME EMPRESA (CNPJ) =================
 @st.cache_data(ttl=86400)
-def buscar_nome_empresa(cnpj):
+def buscar_nome_empresa_cnpj(cnpj):
     try:
         r = requests.get(
             "https://api.portaldatransparencia.gov.br/api-de-dados/empresas",
@@ -59,9 +63,9 @@ def buscar_nome_empresa(cnpj):
             return r.json()[0].get("nomeEmpresarial", "")
     except:
         pass
-    return "Nome não disponível na base pública"
+    return "Nome não informado nesta base"
 
-# ---------------- SANÇÕES ----------------
+# ================= SANÇÕES =================
 @st.cache_data(ttl=3600)
 def checar_sancoes(cnpj):
     raiz = limpar_string(cnpj)[:8]
@@ -86,22 +90,35 @@ def checar_sancoes(cnpj):
             pass
     return False
 
-# ---------------- IA ----------------
-def risco_ia(obj):
-    if not IA_ATIVA or not obj:
+# ================= IA =================
+def analisar_risco_ia(objeto):
+    if not IA_ATIVA or not objeto:
         return "INDEFINIDO"
+
     try:
-        model = genai.GenerativeModel("gemini-2.0-flash")
+        model = genai.GenerativeModel("gemini-pro")
         r = model.generate_content(
-            f"Classifique o risco como ALTO, MÉDIO ou BAIXO:\n{obj}"
+            f"""
+            Classifique o risco do contrato público abaixo.
+            Responda APENAS com: ALTO, MÉDIO ou BAIXO.
+
+            Objeto: "{objeto}"
+            """
         )
-        return r.text.strip().upper()
-    except exceptions.ResourceExhausted:
-        return "INDEFINIDO"
+
+        if not r.text:
+            return "INDEFINIDO"
+
+        resp = r.text.strip().upper()
+        if resp not in ["ALTO", "MÉDIO", "BAIXO"]:
+            return "INDEFINIDO"
+
+        return resp
+
     except:
         return "INDEFINIDO"
 
-# ---------------- CONTRATOS ----------------
+# ================= CONTRATOS =================
 def buscar_contratos(orgao):
     fim = datetime.now()
     ini = fim - timedelta(days=730)
@@ -119,22 +136,27 @@ def buscar_contratos(orgao):
             headers=get_headers(),
             timeout=10
         )
+
         if r.status_code != 200 or not r.json():
             break
+
         lista.extend(r.json())
 
     return lista
 
-# ---------------- UI ----------------
+# ================= UI =================
 st.title("🛡️ GovAudit Pro")
 
 aba1, aba2 = st.tabs(["🕵️ Checagem CNPJ", "📊 Auditoria Contratual"])
 
 # -------- ABA CNPJ --------
 with aba1:
+    st.header("Antecedentes do Fornecedor")
+
     cnpj = st.text_input("CNPJ Alvo:", "05.144.757/0001-72")
+
     if st.button("Verificar"):
-        nome = buscar_nome_empresa(cnpj)
+        nome = buscar_nome_empresa_cnpj(cnpj)
         st.info(f"🏢 **Empresa:** {nome}")
 
         if checar_sancoes(cnpj):
@@ -144,7 +166,12 @@ with aba1:
 
 # -------- ABA CONTRATOS --------
 with aba2:
-    ORGAOS = {"Secretaria-Geral Presidência (Planalto)": "20101"}
+    ORGAOS = {
+        "Secretaria-Geral Presidência (Planalto)": "20101",
+        "Ministério da Saúde": "36000",
+        "Ministério da Educação": "26000"
+    }
+
     orgao = st.selectbox("Órgão:", ORGAOS.keys())
 
     if st.button("Auditar"):
@@ -158,29 +185,32 @@ with aba2:
         )
 
         top_10 = contratos[:10]
+
         tabela = []
         total = 0
 
         bar = st.progress(0, text="Auditando contratos...")
 
         for i, c in enumerate(contratos):
-            val = safe_float(c.get("valorFinalCompra") or c.get("valorInicialCompra"))
+            val = safe_float(
+                c.get("valorFinalCompra") or c.get("valorInicialCompra")
+            )
             total += val
 
             cnpj = c.get("fornecedor", {}).get("cnpjFormatado", "")
-            nome = c.get("fornecedor", {}).get("nome", "")
+            nome_empresa = c.get("fornecedor", {}).get("nome", "")
 
             risco = ""
             status = ""
 
             if c in top_10:
-                risco = risco_ia(c.get("objeto", "")[:120])
+                risco = analisar_risco_ia(c.get("objeto", "")[:120])
                 status = "🚨 ALERTA" if checar_sancoes(cnpj) else "🟢 OK"
                 time.sleep(1)
 
             tabela.append({
                 "Data": data_br(c.get("dataAssinatura")),
-                "Empresa": nome,
+                "Empresa": nome_empresa,
                 "CNPJ": cnpj,
                 "Valor": moeda(val),
                 "Risco IA": risco,
