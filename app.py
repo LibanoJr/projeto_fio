@@ -73,9 +73,13 @@ def checar_sancoes(cnpj):
         return False
 
     cnpj_limpo = limpar_cnpj(cnpj)
-    hoje = datetime.now().date()
 
-    bases = ["ceis", "cnep", "acordos-leniencia"]
+    # 🔒 REGRA DE OURO: só CNPJ (14 dígitos)
+    if len(cnpj_limpo) != 14:
+        return False
+
+    hoje = datetime.now().date()
+    bases = ["ceis", "cnep"]  # REMOVIDO acordos-leniencia (só PJ específica)
 
     for base in bases:
         try:
@@ -90,29 +94,18 @@ def checar_sancoes(cnpj):
                 continue
 
             for item in r.json():
-                sanc = item.get("sancionado") or item.get("pessoa") or {}
-                cnpj_api = limpar_cnpj(
-                    sanc.get("codigoFormatado") or sanc.get("cnpjFormatado")
-                )
+                sanc = item.get("sancionado") or {}
+                cnpj_api = limpar_cnpj(sanc.get("codigoFormatado"))
 
-                # 1️⃣ CNPJ precisa ser exatamente o mesmo
+                # CNPJ exato
                 if cnpj_api != cnpj_limpo:
                     continue
 
-                # 2️⃣ Datas obrigatórias
-                inicio = (
-                    item.get("dataInicioSancao")
-                    or item.get("dataInicial")
-                    or item.get("inicioVigencia")
-                )
-                fim = (
-                    item.get("dataFimSancao")
-                    or item.get("dataFinal")
-                    or item.get("fimVigencia")
-                )
+                inicio = item.get("dataInicioSancao")
+                fim = item.get("dataFimSancao")
 
                 if not inicio or not fim:
-                    continue  # SEM datas → ignora
+                    continue
 
                 try:
                     dt_ini = datetime.strptime(inicio, "%Y-%m-%d").date()
@@ -120,7 +113,6 @@ def checar_sancoes(cnpj):
                 except:
                     continue
 
-                # 3️⃣ Sanção vigente HOJE
                 if dt_ini <= hoje <= dt_fim:
                     return True
 
