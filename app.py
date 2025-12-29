@@ -73,6 +73,8 @@ def checar_sancoes(cnpj):
         return False
 
     cnpj_limpo = limpar_cnpj(cnpj)
+    hoje = datetime.now().date()
+
     bases = ["ceis", "cnep", "acordos-leniencia"]
 
     for base in bases:
@@ -89,27 +91,38 @@ def checar_sancoes(cnpj):
 
             for item in r.json():
                 sanc = item.get("sancionado") or item.get("pessoa") or {}
-                cnpj_api = limpar_cnpj(sanc.get("codigoFormatado") or sanc.get("cnpjFormatado"))
+                cnpj_api = limpar_cnpj(
+                    sanc.get("codigoFormatado") or sanc.get("cnpjFormatado")
+                )
 
-                # 1️⃣ CNPJ precisa bater exatamente
+                # 1️⃣ CNPJ precisa ser exatamente o mesmo
                 if cnpj_api != cnpj_limpo:
                     continue
 
-                # 2️⃣ Verifica vigência
+                # 2️⃣ Datas obrigatórias
+                inicio = (
+                    item.get("dataInicioSancao")
+                    or item.get("dataInicial")
+                    or item.get("inicioVigencia")
+                )
                 fim = (
                     item.get("dataFimSancao")
                     or item.get("dataFinal")
                     or item.get("fimVigencia")
                 )
 
-                if not fim:
-                    return True  # sanção ativa sem data final
+                if not inicio or not fim:
+                    continue  # SEM datas → ignora
 
                 try:
-                    if datetime.strptime(fim, "%Y-%m-%d") >= datetime.now():
-                        return True
+                    dt_ini = datetime.strptime(inicio, "%Y-%m-%d").date()
+                    dt_fim = datetime.strptime(fim, "%Y-%m-%d").date()
                 except:
-                    pass
+                    continue
+
+                # 3️⃣ Sanção vigente HOJE
+                if dt_ini <= hoje <= dt_fim:
+                    return True
 
         except:
             pass
